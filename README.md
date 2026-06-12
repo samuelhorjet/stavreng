@@ -3,8 +3,8 @@
   
   <h1>Stavreng</h1>
   
-  <p><strong>The ultimate AI-Agent oversight and tracking extension for VS Code.</strong></p>
-  <p>Stop letting CLI AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. It is especially powerful for users running Local LLMs, but is equally useful for tracking any standard CLI coding agent (like Claude Code, Aider, Cursor, etc.).</p>
+  <p><strong>The ultimate AI-Agent oversight and tracking extension for VS Code (and compatible IDEs).</strong></p>
+  <p>Stop letting CLI AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. It is especially powerful for users running Local LLMs, but is equally useful for tracking any standard CLI coding agent (like Claude Code, Aider, etc.). Works seamlessly in VS Code, Antigravity, Cursor, VSCodium, and other compatible IDEs.</p>
 </div>
 
 ---
@@ -25,7 +25,7 @@ Stavreng fixes this by intercepting those changes locally and treating them as *
 
 Since this extension is currently in open-source beta, you can install it manually:
 
-1.  Go to the [Releases](#) page of this GitHub repository.
+1.  Go to the [Releases](https://github.com/samuelhorjet/stavreng/releases/) page of this GitHub repository.
 2.  Download the latest `stavreng-x.x.x.vsix` file.
 3.  Open VS Code, go to the **Extensions** panel.
 4.  Click the `...` menu at the top right and select **Install from VSIX**.
@@ -34,6 +34,7 @@ Since this extension is currently in open-source beta, you can install it manual
 ## 🎯 How to Use
 
 1.  Open the Stavreng icon in your VS Code Activity Bar.
+    * **Pro Tip:** For the best agentic workflow, right-click the Stavreng icon and select **Move to Secondary Side Bar**. This allows you to keep your main file explorer open on the left while tracking the AI on the right!
 2.  In the terminal at the bottom, launch your favorite agent (e.g. type `claude` or run your local LLM CLI).
 3.  Ask the AI to build something!
 4.  As the AI modifies your files, you will see the changes tracked in the UI above the terminal as "Pending".
