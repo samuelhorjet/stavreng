@@ -1,8 +1,9 @@
 {
   "name": "stavreng",
+  "displayName": "Stavreng",
   "version": "1.0.0",
-  "description": "Stop letting CLI AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. Especially powerful for Local LLMs and standard CLI agents.",
-  "publisher": "stavreng",
+  "description": "The ultimate AI-Agent oversight and tracking extension for VS Code.",
+  "publisher": "samuelhorjet",
   "repository": {
     "type": "git",
     "url": "https://github.com/samuelhorjet/stavreng.git"
