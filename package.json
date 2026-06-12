@@ -1,0 +1,151 @@
+{
+  "name": "stavreng",
+  "version": "1.0.0",
+  "description": "Stop letting CLI AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. Especially powerful for Local LLMs and standard CLI agents.",
+  "publisher": "stavreng",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samuelhorjet/stavreng.git"
+  },
+  "icon": "media/stavreng-icon.ico",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "stavreng.startSession",
+        "title": "Stavreng: Start Session",
+        "category": "Stavreng",
+        "icon": "$(play)"
+      },
+      {
+        "command": "stavreng.stopSession",
+        "title": "Stavreng: Stop Session",
+        "category": "Stavreng",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "stavreng.showTimeline",
+        "title": "Stavreng: Show Timeline",
+        "category": "Stavreng"
+      },
+      {
+        "command": "stavreng.reviewHunks",
+        "title": "Stavreng: Review Pending Changes",
+        "category": "Stavreng"
+      },
+      {
+        "command": "stavreng.acceptAllSession",
+        "title": "Accept All",
+        "category": "Stavreng",
+        "icon": "$(check)"
+      },
+      {
+        "command": "stavreng.rejectAllSession",
+        "title": "Reject All",
+        "category": "Stavreng",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "stavreng.acceptFileChanges",
+        "title": "Accept All",
+        "category": "Stavreng",
+        "icon": "$(check)"
+      },
+      {
+        "command": "stavreng.rejectFileChanges",
+        "title": "Reject All",
+        "category": "Stavreng",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "stavreng.reviewFileDiff",
+        "title": "Stavreng: Review File Diff",
+        "category": "Stavreng"
+      },
+      {
+        "command": "stavreng.openCustomReviewTab",
+        "title": "Stavreng: Open Review Tab",
+        "category": "Stavreng"
+      },
+      {
+        "command": "stavreng.deleteSession",
+        "title": "Delete Session",
+        "category": "Stavreng",
+        "icon": "$(trash)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "stavreng-explorer",
+          "title": "Stavreng",
+          "icon": "media/stavreng-icon.ico"
+        }
+      ]
+    },
+    "views": {
+      "stavreng-explorer": [
+        {
+          "id": "stavreng-sidebar",
+          "name": "Stavreng",
+          "type": "webview",
+          "icon": "media/stavreng-icon.ico"
+        }
+      ]
+    },
+    "menus": {},
+    "keybindings": [
+      {
+        "command": "stavreng-sidebar.focus",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s"
+      }
+    ],
+    "configuration": {
+      "title": "Stavreng",
+      "properties": {
+        "stavreng.trackingDelayMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Delay in milliseconds after filesystem write before diffing."
+        },
+        "stavreng.enableGutterDecorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable green, yellow, and red gutter line markers for AI changes."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "tsc -p ./"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "diff-match-patch": "^1.0.5",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/diff-match-patch": "^1.0.36",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.107.0",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

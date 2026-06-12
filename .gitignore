@@ -1,0 +1,20 @@
+node_modules/
+dist/
+out/
+.vscode-test/
+vscode/
+*.vsix
+*.vsixmanifest
+.DS_Store
+
+# Dev tools / logs
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Stavreng tracking directories
+.stavreng/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal

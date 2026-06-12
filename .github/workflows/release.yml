@@ -1,0 +1,44 @@
+name: Release VSIX
+
+on:
+  push:
+    tags:
+      - 'v*' # This triggers the workflow ONLY when you push a tag that starts with 'v', like v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Package Extension
+        # Uses npx to run vsce without needing to install it globally
+        run: npx @vscode/vsce package
+
+      - name: Get VSIX file name
+        id: get_vsix
+        run: |
+          VSIX_FILE=$(ls *.vsix | head -n 1)
+          echo "filename=$VSIX_FILE" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.get_vsix.outputs.filename }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
