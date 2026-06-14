@@ -41,6 +41,10 @@ Since this extension is currently in open-source beta, you can install it manual
 5.  Click a specific file to review the diff side-by-side. Use the **Accept All** (check) or **Reject All** (trash) buttons to approve or revert changes.
 6.  When you are done, click **New Terminal** to safely clear the session and start fresh.
 
+## ⚠️ Important Cautions & Best Practices
+
+* **Resolve Pending Changes First:** After an AI agent makes edits to a file, always make sure to either **Accept** or **Reject** those changes *before* editing those same files directly (especially the lines of code modified by the agent). Resolving pending agent modifications first ensures the local tracker remains in sync and prevents conflicts between manual edits and the AI's proposal.
+
 ## 🤝 Contributing
 
 We welcome open-source contributions! To get started:

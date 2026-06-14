@@ -1,6 +1,5 @@
 import { SessionsRepository } from '../db/sessions.js';
 import { WorkspaceWatcher } from './watcher.js';
-import { HumanTracker } from './tracker.js';
 import { Session } from '../db/types.js';
 
 export class SessionCoordinator {
@@ -8,14 +7,18 @@ export class SessionCoordinator {
 
   constructor(
     private sessionsRepo: SessionsRepository,
-    private watcher: WorkspaceWatcher,
-    private tracker: HumanTracker
+    private watcher: WorkspaceWatcher
   ) {}
 
   /**
    * Starts a new Stavreng tracking session.
+   *
+   * After ending the old session, re-snapshots the workspace so the cache
+   * reflects the current state of all files BEFORE this session's agent
+   * begins editing. The isReady gate in handleFileChange prevents any FSW
+   * events from being processed until the snapshot completes.
    */
-  public startSession(agentName: string, workspacePath: string): Session {
+  public async startSession(agentName: string, workspacePath: string): Promise<Session> {
     // End any existing active sessions
     const active = this.sessionsRepo.getActiveSession();
     if (active) {
@@ -35,9 +38,10 @@ export class SessionCoordinator {
     this.sessionsRepo.create(newSession);
     this.activeSession = newSession;
 
-    // Start monitoring
+    // Start watcher then take a fresh snapshot.
+    // The isReady gate holds FSW events until the snapshot finishes.
     this.watcher.start();
-    this.tracker.start();
+    await this.watcher.refreshSnapshot();
 
     return newSession;
   }
@@ -45,8 +49,7 @@ export class SessionCoordinator {
   /**
    * Resumes the most recent session.
    */
-  public resumeLastSession(): Session | null {
-    // End any existing active sessions
+  public async resumeLastSession(): Promise<Session | null> {
     const active = this.sessionsRepo.getActiveSession();
     if (active) {
       this.stopSession(active.id);
@@ -57,15 +60,13 @@ export class SessionCoordinator {
 
     const lastSession = sessions[0];
     this.sessionsRepo.updateStatus(lastSession.id, 'ACTIVE');
-    
-    // Refresh the in-memory object
+
     lastSession.status = 'ACTIVE';
     lastSession.endedAt = null;
     this.activeSession = lastSession;
 
-    // Start monitoring
     this.watcher.start();
-    this.tracker.start();
+    await this.watcher.refreshSnapshot();
 
     return lastSession;
   }
@@ -78,11 +79,10 @@ export class SessionCoordinator {
     if (!targetId) return;
 
     this.sessionsRepo.updateStatus(targetId, 'COMPLETED', new Date().toISOString());
-    
+
     if (this.activeSession && this.activeSession.id === targetId) {
       this.activeSession = null;
       this.watcher.stop();
-      this.tracker.stop();
     }
   }
 
@@ -91,9 +91,11 @@ export class SessionCoordinator {
       const active = this.sessionsRepo.getActiveSession();
       if (active) {
         this.activeSession = active;
-        // Resume watching/tracking
         this.watcher.start();
-        this.tracker.start();
+        // Snapshot in background — FSW gate will hold events until ready
+        this.watcher.refreshSnapshot().catch(err => {
+          console.error('[Stavreng] Background snapshot failed:', err);
+        });
       }
     }
     return this.activeSession;

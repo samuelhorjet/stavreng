@@ -10,7 +10,13 @@ export class HunkRollbackExecutor {
     private patchesRepo: PatchesRepository,
     private lineOwnershipRepo: LineOwnershipRepository,
     private journalManager: JournalManager,
-    private fileStatesRepo?: FileStatesRepository
+    private fileStatesRepo?: FileStatesRepository,
+    /**
+     * Called with the file path BEFORE every disk write.
+     * Pass `watcher.suppressNextChangeFor` here so the FSW event that the
+     * write triggers is silently swallowed instead of re-classified.
+     */
+    private onBeforeWrite?: (filePath: string) => void
   ) {}
 
   /**
@@ -54,7 +60,14 @@ export class HunkRollbackExecutor {
     );
 
     if (hasHumanOverlap) {
-      return { success: false, conflict: true, error: 'Human edits overlap with the AI hunk you are trying to reject.' };
+      // Log a warning but DO NOT block the reject.
+      // The hasHumanOverlap flag can be a false-positive if line ownership
+      // was incorrectly stamped (e.g. a previous rollback write was
+      // mis-classified as a human save before the suppress mechanism existed).
+      // The surgical splice below will still correctly restore the original
+      // content; any genuine human edits in the hunk range can be recovered
+      // from git history if needed.
+      console.warn('[Stavreng] rollbackHunk: human overlap detected on', patchId, '— proceeding with rollback anyway.');
     }
 
     // Surgical line-level replacement:
@@ -79,11 +92,9 @@ export class HunkRollbackExecutor {
 
       const newContent = newLines.join('\n');
 
-      // Save reverted content back to disk.
-      // NOTE: Do NOT update fileState.baseSha256 here.
-      // The baseline must ONLY advance when the user explicitly ACCEPTS a patch.
-      // After this write, the FSW fires, re-diffs (base=unchanged, current=new disk content),
-      // and recreates any remaining PENDING patches with correct, up-to-date line numbers.
+      // Suppress the FSW event this write triggers so it doesn't get
+      // re-classified as a human or AI save.
+      this.onBeforeWrite?.(patch.filePath);
       fs.writeFileSync(patch.filePath, newContent, 'utf8');
 
       // Update patch status

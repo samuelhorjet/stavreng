@@ -152,11 +152,16 @@ export class StavrengReviewWebview {
       let patchLineNum = patch.modifiedStartLine;
       const lines = patch.hunkDiff.split('\n');
       for (const line of lines) {
+        // Skip unified diff metadata markers (e.g. "\ No newline at end of file")
+        if (line.startsWith('\\')) continue;
+        if (line === '') continue;
+
         if (line.startsWith('+')) {
           fullHtml += this.renderAddedLine(patchLineNum++, line.slice(1));
         } else if (line.startsWith('-')) {
           fullHtml += this.renderRemovedLine(line.slice(1));
-        } else if (line.trim() !== '') {
+        } else {
+          // Context line (starts with space) — show as unchanged
           fullHtml += this.renderNormalLine(patchLineNum++, line.slice(1));
         }
       }

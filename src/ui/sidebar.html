@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src {{CSP_SOURCE}} 'unsafe-inline' 'unsafe-eval';
+                 style-src  {{CSP_SOURCE}} 'unsafe-inline';
+                 img-src    {{CSP_SOURCE}} data: blob:;
+                 font-src   {{CSP_SOURCE}} data:;
+                 connect-src *;">
+  <title>Stavreng</title>
+  <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
+  <script src="{{XTERM_JS_URI}}"></script>
+  <script src="{{XTERM_FIT_JS_URI}}"></script>
+  <link rel="stylesheet" href="{{SIDEBAR_CSS_URI}}">
+</head>
+<body>
+  <div class="nav-header">
+    <div class="top-controls">
+      <div class="brand-title">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Stavreng
+      </div>
+      <div class="session-actions">
+        <button id="btn-launch" class="btn-terminal-action" onclick="launchAgent()" title="Quick Launch AI Agent">
+          🚀 Launch
+        </button>
+        <button id="btn-new" class="btn-terminal-action" onclick="newTerminal()" title="New terminal session">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New
+        </button>
+        <span id="badge-guard" class="guard-status idle" onclick="toggleGuard()" title="Toggle Agent Guard State">🟢 Idle</span>
+        <button class="btn-circle" onclick="showHistory()" title="Conversation History">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="tabs-bar">
+      <button class="tab-btn active" onclick="switchTab('terminal')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        Terminal
+      </button>
+      <button class="tab-btn" onclick="switchTab('timeline')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Timeline
+      </button>
+      <button class="tab-btn" onclick="switchTab('pending')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Pending <span id="badge-pending" class="badge-count" style="display:none">0</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="tab-content">
+    <div id="panel-terminal" class="panel active">
+      <div id="terminal-wrap">
+        <!-- Loading spinner: shown while extension snapshots the workspace.
+             Hidden automatically once the extension calls setExtensionReady(). -->
+        <div id="init-overlay" style="
+          position: absolute; inset: 0; z-index: 50;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          background: var(--bg); gap: 12px;
+        ">
+          <style>
+            @keyframes stavreng-spin {
+              from { transform: rotate(0deg); }
+              to   { transform: rotate(360deg); }
+            }
+            #init-spinner {
+              width: 28px; height: 28px;
+              border: 3px solid rgba(128,128,128,0.2);
+              border-top-color: var(--accent, #007acc);
+              border-radius: 50%;
+              animation: stavreng-spin 0.8s linear infinite;
+            }
+          </style>
+          <div id="init-spinner"></div>
+          <div id="init-label" style="font-size:11px; opacity:0.65; letter-spacing:0.3px;">Indexing workspace...</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="panel-timeline" class="panel">
+      <div class="section-title">Sessions Log</div>
+      <div id="timeline-list">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <div id="panel-pending" class="panel">
+      <div class="section-title">AI Changes Waiting Review</div>
+      <div id="pending-list">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const vscode = acquireVsCodeApi();
+      let activeTab = 'terminal';
+      let term = null;
+      let fitAddon = null;
+      let isAgentRunning = false;
+      let isInAgentCli = false;
+      let isHistoryView = false;
+
+      // Tracks which session cards are currently expanded (by session ID).
+      // Active sessions start expanded; completed sessions start collapsed.
+      const expandedSessions = new Set();
+
+      // Initialize xterm.js
+      function initTerminal() {
+        const wrap = document.getElementById('terminal-wrap');
+        const diag = document.getElementById('diag-status');
+        const setStatus = (msg) => { if (diag) diag.textContent = msg; };
+
+        setStatus('Step 1: Starting...');
+
+        if (typeof Terminal === 'undefined') {
+          setStatus('ERROR: xterm.js failed to load! Check CSP / network.');
+          return;
+        }
+        setStatus('Step 2: xterm available, creating Terminal...');
+
+        let termLocal;
+        try {
+          termLocal = new Terminal({
+            cursorBlink: true,
+            scrollback: 10000,
+            fontFamily: 'Consolas, "Cascadia Code", "Courier New", monospace',
+            fontSize: 12,
+            lineHeight: 1.2,
+            convertEol: false,
+          });
+          term = termLocal;
+          setStatus('Step 3: Terminal object created');
+        } catch(e) {
+          setStatus('ERROR creating Terminal: ' + e.message);
+          return;
+        }
+
+        try {
+          if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            setStatus('Step 4: FitAddon loaded');
+          } else {
+            setStatus('Step 4: FitAddon not available');
+          }
+        } catch(e) {
+          setStatus('ERROR loading FitAddon: ' + e.message);
+        }
+
+        try {
+          setStatus('Step 5: Calling term.open(wrap)...');
+          term.open(wrap);
+          setStatus('Step 6: term.open() succeeded');
+        } catch(e) {
+          setStatus('ERROR in term.open: ' + e.message);
+          return;
+        }
+
+        term.attachCustomKeyEventHandler(function (e) {
+          const isCopy = (e.ctrlKey || e.metaKey) && e.key === 'c';
+          const isCtrlA = (e.ctrlKey || e.metaKey) && e.key === 'a';
+          const isCtrlZ = (e.ctrlKey || e.metaKey) && e.key === 'z';
+          const isCtrlY = (e.ctrlKey || e.metaKey) && e.key === 'y';
+          const isCtrlX = (e.ctrlKey || e.metaKey) && e.key === 'x';
+
+          if (isCopy) {
+            if (term.hasSelection()) {
+              if (e.type === 'keydown') {
+                const text = term.getSelection();
+                navigator.clipboard.writeText(text);
+              }
+              return false;
+            }
+          }
+
+          if (isCtrlA || isCtrlZ || isCtrlY || isCtrlX) {
+            if (e.type === 'keydown') {
+              let char = '';
+              if (e.key === 'a') char = '\x01';
+              if (e.key === 'z') char = '\x1a';
+              if (e.key === 'y') char = '\x19';
+              if (e.key === 'x') char = '\x18';
+
+              if (char) {
+                vscode.postMessage({ command: 'input', data: char });
+              }
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+          }
+
+          return true;
+        });
+
+        function fit() {
+          try {
+            if (fitAddon) { fitAddon.fit(); }
+            vscode.postMessage({ command: 'resize', cols: term.cols, rows: term.rows });
+          } catch(e) {}
+        }
+
+        let fitScheduled = false;
+        function scheduleFit() {
+          if (fitScheduled) return;
+          fitScheduled = true;
+          requestAnimationFrame(() => {
+            fitScheduled = false;
+            fit();
+          });
+        }
+
+        requestAnimationFrame(() => {
+          setStatus('Step 7: Fitting and sending ready...');
+          fit();
+          vscode.postMessage({ command: 'ready', cols: term.cols, rows: term.rows });
+          setTimeout(() => { if (diag) diag.style.display = 'none'; }, 3000);
+        });
+
+        new ResizeObserver(scheduleFit).observe(wrap);
+
+        term.onData(function(data) {
+          if (isHistoryView) return;
+          vscode.postMessage({ command: 'input', data: data });
+        });
+      }
+
+      // Tab Switching with Animations
+      window.switchTab = function(tabId) {
+        if (activeTab === tabId) return;
+
+        document.querySelector('.tab-btn.active').classList.remove('active');
+        document.querySelector('.panel.active').classList.remove('active');
+
+        const newTabBtn = Array.from(document.querySelectorAll('.tab-btn')).find(btn => btn.outerHTML.includes(tabId));
+        if (newTabBtn) newTabBtn.classList.add('active');
+
+        const newPanel = document.getElementById('panel-' + tabId);
+        newPanel.classList.add('active');
+
+        activeTab = tabId;
+
+        if (tabId === 'terminal' && fitAddon) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              try {
+                fitAddon.fit();
+                vscode.postMessage({ command: 'resize', cols: term.cols, rows: term.rows });
+              } catch(e) {}
+            });
+          });
+        }
+      };
+
+      // Header Controls Callbacks
+      window.toggleGuard = function() {
+        vscode.postMessage({ command: 'toggle-agent', active: !isAgentRunning });
+      };
+      window.launchAgent = function() {
+        if (isInAgentCli) return;
+        const pendingCount = parseInt(document.getElementById('badge-pending')?.dataset.count || '0', 10);
+        if (pendingCount > 0) {
+          const pendingTab = Array.from(document.querySelectorAll('.tab-btn'))
+            .find(btn => btn.textContent.trim().includes('Pending'));
+          if (pendingTab) {
+            pendingTab.classList.add('flash-warn');
+            setTimeout(() => pendingTab.classList.remove('flash-warn'), 1200);
+          }
+          return;
+        }
+        vscode.postMessage({ command: 'launch-agent' });
+      };
+      window.showHistory = function() {
+        vscode.postMessage({ command: 'show-history' });
+      };
+      window.newTerminal = function() {
+        if (isInAgentCli) return;
+        const pendingCount = parseInt(document.getElementById('badge-pending')?.dataset.count || '0', 10);
+        if (pendingCount > 0) {
+          const pendingTab = Array.from(document.querySelectorAll('.tab-btn'))
+            .find(btn => btn.textContent.trim().includes('Pending'));
+          if (pendingTab) {
+            pendingTab.classList.add('flash-warn');
+            setTimeout(() => pendingTab.classList.remove('flash-warn'), 1200);
+          }
+          return;
+        }
+        vscode.postMessage({ command: 'new-terminal' });
+      };
+
+      // Sidebar Action delegates
+      window.stopSession = function() {
+        if (isInAgentCli) return;
+        vscode.postMessage({ command: 'stop-session' });
+      };
+      window.deleteSession = function(sessionId, e) {
+        if (e) e.stopPropagation();
+        if (isInAgentCli) return;
+        vscode.postMessage({ command: 'delete-session', sessionId });
+      };
+      window.acceptSession = function(sessionId, e) {
+        if (e) e.stopPropagation();
+        vscode.postMessage({ command: 'accept-session', sessionId });
+      };
+      window.rejectSession = function(sessionId, e) {
+        if (e) e.stopPropagation();
+        vscode.postMessage({ command: 'reject-session', sessionId });
+      };
+      window.acceptFile = function(filePath, e) {
+        if (e) e.stopPropagation();
+        vscode.postMessage({ command: 'accept-file', filePath });
+      };
+      window.rejectFile = function(filePath, e) {
+        if (e) e.stopPropagation();
+        vscode.postMessage({ command: 'reject-file', filePath });
+      };
+      window.openReview = function(filePath, e) {
+        if (e) e.stopPropagation();
+        vscode.postMessage({ command: 'open-review', filePath });
+      };
+
+      // Toggle expand/collapse of a session card body
+      window.toggleSession = function(sessionId, e) {
+        if (e) e.stopPropagation();
+        const body = document.getElementById(`session-body-${sessionId}`);
+        const btn  = document.getElementById(`session-expand-${sessionId}`);
+        if (!body || !btn) return;
+
+        if (expandedSessions.has(sessionId)) {
+          expandedSessions.delete(sessionId);
+          body.classList.remove('expanded');
+          btn.classList.remove('expanded');
+        } else {
+          expandedSessions.add(sessionId);
+          body.classList.add('expanded');
+          btn.classList.add('expanded');
+        }
+      };
+
+      // ── State Rendering Functions ────────────────────────────────────────
+
+      function renderTimeline(sessions) {
+        const list = document.getElementById('timeline-list');
+        if (!sessions || sessions.length === 0) {
+          list.innerHTML = `<div class="empty-state">No historical sessions.</div>`;
+          return;
+        }
+
+        // Auto-expand ACTIVE sessions that aren't already tracked
+        sessions.forEach(s => {
+          if (s.status === 'ACTIVE' && !expandedSessions.has(s.id)) {
+            expandedSessions.add(s.id);
+          }
+        });
+
+        list.innerHTML = sessions.map((s, idx) => {
+          const filesHtml = s.files.map(f => `
+            <div class="file-row" onclick="openReview('${f.filePath}', event)">
+              <div class="file-info">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span class="file-name" title="${f.filePath}">${f.fileName}</span>
+              </div>
+              <div class="file-stats">
+                <span class="stat-add">+${f.added}</span>/<span class="stat-sub">-${f.removed}</span>
+              </div>
+            </div>
+          `).join('');
+
+          const dateStr = new Date(s.startedAt).toLocaleString();
+          const badgeClass = s.status === 'ACTIVE' ? 'active' : 'completed';
+          const isExpanded = expandedSessions.has(s.id);
+
+          let headerActions = '';
+          if (s.hasPending) {
+            headerActions = `
+              <div class="actions-row">
+                <button class="btn-small primary" onclick="acceptSession('${s.id}', event)">Accept All</button>
+                <button class="btn-small" onclick="rejectSession('${s.id}', event)">Reject All</button>
+              </div>
+            `;
+          }
+
+          const btnClass = isInAgentCli ? 'btn-icon disabled' : 'btn-icon';
+          const stopTitle = isInAgentCli ? 'Agent is running — stop it first' : 'Stop Session';
+          const deleteTitle = isInAgentCli ? 'Agent is running — stop it first' : 'Delete Session';
+
+          const cardActions = s.status === 'ACTIVE'
+            ? `<button class="${btnClass} btn-stop-session" onclick="stopSession()" title="${stopTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16"/></svg></button>`
+            : `<button class="${btnClass} btn-stop-session" onclick="deleteSession('${s.id}', event)" title="${deleteTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
+
+          // Session-level total added/removed
+          const totalAdded   = s.totalAdded   || 0;
+          const totalRemoved = s.totalRemoved || 0;
+
+          return `
+            <div class="session-card" style="animation-delay: ${idx * 0.05}s">
+              <!-- Always-visible header row — clicking arrow expands/collapses -->
+              <div class="session-header" onclick="toggleSession('${s.id}', event)">
+                <span class="session-name">
+                  ${s.agentName}
+                  <span class="session-status-badge ${badgeClass}">${s.status}</span>
+                </span>
+                <div class="session-summary">
+                  <span class="stat-add">+${totalAdded}</span>
+                  <span class="stat-sub">-${totalRemoved}</span>
+                </div>
+                <button id="session-expand-${s.id}" class="btn-expand ${isExpanded ? 'expanded' : ''}"
+                        onclick="toggleSession('${s.id}', event)" title="${isExpanded ? 'Collapse' : 'Expand'}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+                ${cardActions}
+              </div>
+
+              <!-- Collapsible body -->
+              <div id="session-body-${s.id}" class="session-body ${isExpanded ? 'expanded' : ''}">
+                <div class="session-body-inner">
+                  <div class="session-time">${dateStr}</div>
+                  <div class="session-files">
+                    ${filesHtml}
+                  </div>
+                  ${headerActions}
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      function renderPending(pendingFiles) {
+        const list = document.getElementById('pending-list');
+        const badgePending = document.getElementById('badge-pending');
+
+        let pendingCount = 0;
+        pendingFiles.forEach(f => pendingCount += f.count);
+
+        if (pendingCount > 0) {
+          badgePending.textContent = pendingCount;
+          badgePending.dataset.count = pendingCount;   // used by newTerminal/launchAgent guard
+          badgePending.style.display = 'inline-block';
+        } else {
+          // BUG FIX: reset both textContent and data-count so the button guard
+          // reads 0 correctly even when the badge is hidden.
+          badgePending.textContent = '0';
+          badgePending.dataset.count = '0';
+          badgePending.style.display = 'none';
+        }
+
+        if (!pendingFiles || pendingFiles.length === 0) {
+          list.innerHTML = `<div class="empty-state">No changes pending review.</div>`;
+          return;
+        }
+
+        list.innerHTML = pendingFiles.map((f, idx) => `
+          <div class="pending-card" style="animation-delay: ${idx * 0.04}s" onclick="openReview('${f.filePath}', event)">
+            <div class="file-info" style="flex:1">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span class="file-name" title="${f.filePath}">${f.fileName}</span>
+              <span class="badge-count" style="margin-left:4px; font-size:9px">${f.count}</span>
+            </div>
+            <div class="pending-actions">
+              <button class="btn-small primary" onclick="acceptFile('${f.filePath}', event)">Accept</button>
+              <button class="btn-small danger" onclick="rejectFile('${f.filePath}', event)">Reject</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      // ── Backend Message Listener ─────────────────────────────────────────
+
+      window.addEventListener('message', function (event) {
+        const msg = event.data;
+        switch (msg.command) {
+          case 'output': {
+            const diag2 = document.getElementById('diag-status');
+            if (diag2 && diag2.style.display !== 'none') {
+              diag2.textContent = 'OUTPUT received: ' + msg.data.length + ' bytes. term=' + (term ? 'ok' : 'NULL');
+            }
+            if (term) term.write(msg.data);
+            break;
+          }
+          case 'new-terminal':
+            if (term) {
+              term.clear();
+              term.reset();
+            }
+            break;
+          case 'focus-terminal':
+            if (term && !isHistoryView) {
+              term.focus();
+            }
+            break;
+          case 'show-history-view':
+            if (term) {
+              term.clear();
+              term.reset();
+              isHistoryView = true;
+
+              let banner = document.getElementById('history-banner');
+              if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'history-banner';
+                banner.style.position = 'absolute';
+                banner.style.top = '0';
+                banner.style.left = '0';
+                banner.style.right = '0';
+                banner.style.padding = '6px 10px';
+                banner.style.background = 'var(--vscode-editorError-background, rgba(255, 50, 50, 0.15))';
+                banner.style.color = 'var(--vscode-editorError-foreground, #ff8080)';
+                banner.style.borderBottom = '1px solid var(--vscode-editorError-border, rgba(255, 50, 50, 0.4))';
+                banner.style.zIndex = '100';
+                banner.style.display = 'flex';
+                banner.style.justifyContent = 'space-between';
+                banner.style.alignItems = 'center';
+                banner.style.fontSize = '11px';
+                banner.style.fontWeight = '600';
+
+                const titleSpan = document.createElement('span');
+                banner.appendChild(titleSpan);
+
+                const backBtn = document.createElement('button');
+                backBtn.innerHTML = '⬅ Back to Active Terminal';
+                backBtn.className = 'btn-small primary';
+                backBtn.onclick = () => {
+                  banner.style.display = 'none';
+                  isHistoryView = false;
+                  vscode.postMessage({ command: 'resume-active-terminal' });
+                };
+                banner.appendChild(backBtn);
+
+                const wrap = document.getElementById('terminal-wrap');
+                wrap.style.position = 'relative';
+                wrap.appendChild(banner);
+              }
+
+              banner.children[0].textContent = 'Read-Only History: ' + msg.title;
+              banner.style.display = 'flex';
+
+              document.getElementById('btn-launch')?.classList.add('disabled');
+              document.getElementById('btn-new')?.classList.add('disabled');
+
+              term.write(msg.data);
+              switchTab('terminal');
+            }
+            break;
+          case 'loading':
+            const initLabel = document.getElementById('init-label');
+            if (initLabel && msg.message) initLabel.textContent = msg.message;
+            break;
+          case 'ready':
+            const overlay = document.getElementById('init-overlay');
+            if (overlay) overlay.remove();
+            break;
+          case 'status':
+            isAgentRunning = msg.active;
+            isInAgentCli = msg.inCli;
+            const badge = document.getElementById('badge-guard');
+
+            if (isInAgentCli) {
+              if (isAgentRunning) {
+                badge.className = 'guard-status active';
+                badge.textContent = '🤖 Running';
+              } else {
+                badge.className = 'guard-status monitoring';
+                badge.textContent = '🤖 Active';
+              }
+            } else {
+              badge.className = 'guard-status idle';
+              badge.textContent = '🟢 Idle';
+            }
+
+            const btnLaunch = document.getElementById('btn-launch');
+            const btnNew = document.getElementById('btn-new');
+            const stopBtns = document.querySelectorAll('.btn-stop-session');
+
+            if (isInAgentCli) {
+              if (btnLaunch) {
+                btnLaunch.classList.add('disabled');
+                btnLaunch.title = 'The agent is running, stop the agent first before you can launch another agent';
+              }
+              if (btnNew) {
+                btnNew.classList.add('disabled');
+                btnNew.title = 'The agent is running, stop the agent first before you can open a new terminal';
+              }
+              stopBtns.forEach(btn => {
+                btn.classList.add('disabled');
+                btn.title = 'The agent is running, stop the agent first before you can close this session';
+              });
+            } else {
+              if (btnLaunch) {
+                btnLaunch.classList.remove('disabled');
+                btnLaunch.title = 'Quick Launch AI Agent';
+              }
+              if (btnNew) {
+                btnNew.classList.remove('disabled');
+                btnNew.title = 'New terminal session';
+              }
+              stopBtns.forEach(btn => {
+                btn.classList.remove('disabled');
+                btn.title = btn.onclick && btn.onclick.toString().includes('deleteSession') ? 'Delete Session' : 'Stop Session';
+              });
+            }
+            break;
+          case 'state': {
+            renderTimeline(msg.sessions);
+            renderPending(msg.pendingFiles);
+
+            // Block "New" and "Launch" buttons when there are pending AI changes.
+            const hasPending = msg.pendingFiles && msg.pendingFiles.length > 0;
+            const btnNewState = document.getElementById('btn-new');
+            const btnLaunchState = document.getElementById('btn-launch');
+            if (hasPending) {
+              if (btnNewState && !isInAgentCli) {
+                btnNewState.classList.add('pending-blocked');
+                btnNewState.title = '⚠️ Review pending AI changes first — accept or reject them before starting a new session';
+              }
+              if (btnLaunchState && !isInAgentCli) {
+                btnLaunchState.classList.add('pending-blocked');
+                btnLaunchState.title = '⚠️ Review pending AI changes first — accept or reject them before launching a new agent';
+              }
+            } else {
+              if (btnNewState) {
+                btnNewState.classList.remove('pending-blocked');
+                if (!isInAgentCli) btnNewState.title = 'New terminal session';
+              }
+              if (btnLaunchState) {
+                btnLaunchState.classList.remove('pending-blocked');
+                if (!isInAgentCli) btnLaunchState.title = 'Quick Launch AI Agent';
+              }
+            }
+            break;
+          }
+        }
+      });
+
+      // Launch
+      initTerminal();
+    })();
+  </script>
+</body>
+</html>

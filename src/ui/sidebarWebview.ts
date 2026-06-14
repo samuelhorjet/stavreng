@@ -18,6 +18,16 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
   private idleTimer?: NodeJS.Timeout;
   private lineBuffer = '';
 
+  /**
+   * Set to true once the extension has finished its workspace snapshot.
+   * The terminal will NOT start until this is true.
+   */
+  private isExtensionReady = false;
+
+  /** Saved cols/rows from the first 'ready' message, so PTY can start once extension is done. */
+  private pendingReadyCols?: number;
+  private pendingReadyRows?: number;
+
   /** Scrollback buffer: stores all raw PTY output so we can replay it when
    *  the webview is torn down (sidebar hidden) and recreated (sidebar shown). */
   private terminalScrollback = '';
@@ -51,7 +61,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     this.conversationHistory = this.context.workspaceState.get<any[]>('stavreng.conversationHistory', []);
   }
 
-  // ─── Public API ───────────────────────────────────────────────────────────
+  // â”€â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   public isAgentRunning(): boolean {
     return this.isInAgentCli || this.isAgentActive;
@@ -97,6 +107,22 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     this.refresh();
     if (this.view) {
       this.view.webview.postMessage({ command: 'status', active: false, inCli: false });
+    }
+  }
+
+  /**
+   * Called by extension.ts once snapshotWorkspace() has finished.
+   * Flips the ready gate and starts the terminal if the webview was waiting.
+   */
+  public setExtensionReady(): void {
+    this.isExtensionReady = true;
+    if (this.view) {
+      // Tell the webview to hide the spinner
+      this.view.webview.postMessage({ command: 'ready' });
+    }
+    if (!this.ptyProcess) {
+      // Webview sent 'ready' while we were still snapshotting â€” start PTY now
+      this.startPty(this.pendingReadyCols, this.pendingReadyRows);
     }
   }
 
@@ -173,7 +199,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ─── Shell Detection ──────────────────────────────────────────────────────
+  // â”€â”€â”€ Shell Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private getShellConfig(): { shell: string; args: string[] } {
     if (os.platform() === 'win32') {
@@ -215,7 +241,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ─── PTY Lifecycle ────────────────────────────────────────────────────────
+  // â”€â”€â”€ PTY Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private startPty(cols?: number, rows?: number) {
     if (cols) this.lastCols = cols;
@@ -377,7 +403,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ command: 'output', data });
     }
 
-    // ── Layer 1: Alternate Screen Buffer ──────────────────────────────────
+    // â”€â”€ Layer 1: Alternate Screen Buffer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Full-screen TUI agents (Claude Code, Open Code) enter the alternate
     // screen buffer. curl, npm, git, pnpm, etc. never do.
     // Guard: only trigger after the user has typed something (lastInputTime > 0)
@@ -396,9 +422,9 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // ── Layer 2: Interactive TUI Stdin Takeover signals ────────────────────
+    // â”€â”€ Layer 2: Interactive TUI Stdin Takeover signals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Inline TUI agents (agy/Antigravity CLI, Codex/React Ink, Aider, etc.)
-    // don't use the alternate screen — instead they signal stdin takeover via
+    // don't use the alternate screen â€” instead they signal stdin takeover via
     // one or more of these sequences. curl, npm, git, pnpm NEVER emit these.
     //
     // IMPORTANT: PowerShell itself emits \x1b[?9001h and \x1b[?1004h on startup.
@@ -406,9 +432,9 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     // Solution: only honour enter-signals AFTER the user has typed something.
     //
     // Detection priority (earliest-fired first for agy):
-    //   \x1b[?9001h  Win32 extended input mode  ← agy emits this FIRST (but so does PSReadLine!)
-    //   \x1b[?1004h  Focus-in/out event tracking ← agy emits this second (also PSReadLine)
-    //   \x1b[?2004h  Bracketed paste mode        ← Codex, aider, most others
+    //   \x1b[?9001h  Win32 extended input mode  â† agy emits this FIRST (but so does PSReadLine!)
+    //   \x1b[?1004h  Focus-in/out event tracking â† agy emits this second (also PSReadLine)
+    //   \x1b[?2004h  Bracketed paste mode        â† Codex, aider, most others
     //
     // Exit signals (any one of these means the agent exited):
     //   \x1b[?9001l / \x1b[?1004l / \x1b[?2004l
@@ -510,7 +536,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     for (let i = 0; i < cleanData.length; i++) {
       const ch = cleanData[i];
       if (ch === '\r' || ch === '\n') {
-        // Pressing Enter while inside agent CLI = user sent a message → Running
+        // Pressing Enter while inside agent CLI = user sent a message â†’ Running
         if (this.isInAgentCli) {
           // Reset mouse/resize suppression so the agent response isn't silenced
           this.lastMouseEventTime = 0;
@@ -548,7 +574,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     this.sendBridgeMessage({ action: 'resize', cols, rows });
   }
 
-  // ─── VS Code WebviewView ──────────────────────────────────────────────────
+  // â”€â”€â”€ VS Code WebviewView â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -568,19 +594,21 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
       switch (message.command) {
         case 'ready':
           if (this.ptyProcess) {
-            // Sidebar was just hidden and re-shown — PTY is still alive.
-            // Replay the scrollback buffer so xterm catches up, then don't
-            // restart the PTY (the shell is already running).
+            // Sidebar was just hidden and re-shown â€” PTY is still alive.
+            // Replay the scrollback buffer so xterm catches up.
             if (this.terminalScrollback) {
               webviewView.webview.postMessage({ command: 'output', data: this.terminalScrollback });
             }
-            // Re-sync size in case the panel was resized while hidden
             this.handleResize(message.cols, message.rows);
+          } else if (!this.isExtensionReady) {
+            // Extension is still snapshotting the workspace.
+            // Save the dimensions and start the PTY once we're ready.
+            this.pendingReadyCols = message.cols;
+            this.pendingReadyRows = message.rows;
+            // The spinner is already shown via HTML; send the loading command to make it explicit.
+            webviewView.webview.postMessage({ command: 'loading', message: 'Indexing workspace...' });
           } else {
-            // Fresh extension load or the PTY died — start a brand-new shell.
-            // Do NOT replay old scrollback here; it would interleave with the
-            // new shell's startup output and freeze xterm. Users can browse
-            // past sessions via the History button instead.
+            // Extension is ready and PTY is not running â€” start a brand-new shell.
             this.startPty(message.cols, message.rows);
           }
           this.sendStateMessage();
@@ -609,7 +637,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
             }
           }
 
-          // User requested a fresh terminal — finalize history & restart
+          // User requested a fresh terminal â€” finalize history & restart
           this.saveCurrentSessionToHistory();
           // Reset history state for the new terminal
           this.currentHistoryBuffer = '';
@@ -688,6 +716,32 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
       this.view = undefined;
     });
 
+    // â”€â”€ Auto-focus terminal when VS Code window regains focus â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // When the user alt-tabs back to VS Code, the webview loses focus to the
+    // editor. We post a 'focus-terminal' message so xterm calls term.focus()
+    // automatically â€” no need to click the sidebar.
+    const windowFocusDisposable = vscode.window.onDidChangeWindowState(state => {
+      if (state.focused && this.view?.visible) {
+        // Small delay to let VS Code finish its own focus restoration
+        setTimeout(() => {
+          this.view?.webview.postMessage({ command: 'focus-terminal' });
+        }, 150);
+      }
+    });
+
+    // Also refocus when the sidebar panel itself becomes visible
+    // (e.g. user clicks the sidebar icon or switches back to this panel)
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        setTimeout(() => {
+          this.view?.webview.postMessage({ command: 'focus-terminal' });
+        }, 100);
+      }
+    });
+
+    // Store disposables so they're cleaned up when the extension deactivates
+    this.context.subscriptions.push(windowFocusDisposable);
+
     // Send initial status
     webviewView.webview.postMessage({ command: 'status', active: this.isAgentActive, inCli: this.isInAgentCli });
   }
@@ -718,6 +772,9 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
         };
       });
 
+      const totalAdded   = filesData.reduce((sum, f) => sum + f.added,   0);
+      const totalRemoved = filesData.reduce((sum, f) => sum + f.removed, 0);
+
       return {
         id: s.id,
         agentName: s.agentName,
@@ -725,7 +782,9 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
         startedAt: s.startedAt,
         endedAt: s.endedAt,
         files: filesData,
-        hasPending: pendingPatches.some(p => p.sessionId === s.id)
+        hasPending: pendingPatches.some(p => p.sessionId === s.id),
+        totalAdded,
+        totalRemoved
       };
     });
 
@@ -748,912 +807,27 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  // ─── HTML Content ─────────────────────────────────────────────────────────
+  // â”€â”€â”€ HTML Content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //
+  // The HTML template lives in media/sidebar.html and the styles in
+  // media/sidebar.css.  This method loads both files at runtime and
+  // substitutes the {{PLACEHOLDER}} tokens with the correct webview URIs.
 
   private getHtmlContent(webview: vscode.Webview): string {
-    const xtermCssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'));
-    const xtermJsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'));
-    const xtermFitJsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'));
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none';
-                 script-src ${webview.cspSource} 'unsafe-inline' 'unsafe-eval';
-                 style-src  ${webview.cspSource} 'unsafe-inline';
-                 img-src    ${webview.cspSource} data: blob:;
-                 font-src   ${webview.cspSource} data:;
-                 connect-src *;">
-  <title>Stavreng</title>
-  <link rel="stylesheet" href="${xtermCssUri}">
-  <script src="${xtermJsUri}"></script>
-  <script src="${xtermFitJsUri}"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    
-    :root {
-      --bg: var(--vscode-sideBar-background, #1e1e1e);
-      --fg: var(--vscode-sideBar-foreground, #cccccc);
-      --border: var(--vscode-sideBar-border, rgba(128,128,128,0.2));
-      --active-tab-bg: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.12));
-      --accent: var(--vscode-button-background, #007acc);
-      --accent-hover: var(--vscode-button-hoverBackground, #0062a3);
-      --accent-fg: var(--vscode-button-foreground, #ffffff);
-      --danger: #f14c4c;
-      --success: #23d18b;
-      --card-bg: rgba(128, 128, 128, 0.06);
-    }
-
-    html, body {
-      margin: 0; padding: 0; width: 100%; height: 100vh;
-      display: flex; flex-direction: column; overflow: hidden;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: var(--vscode-font-family, sans-serif);
-      font-size: var(--vscode-font-size, 13px);
-    }
-
-    /* Top Navigation bar */
-    .nav-header {
-      display: flex; flex-direction: column;
-      flex-shrink: 0;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg);
-      z-index: 10;
-    }
-
-    .top-controls {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 5px 8px;
-      background: rgba(128, 128, 128, 0.04);
-      min-width: 0; /* allow flex children to shrink */
-    }
-
-    .brand-title {
-      font-weight: 700;
-      font-size: 10px;
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      opacity: 0.85;
-      display: flex; align-items: center; gap: 3px;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .guard-status {
-      display: flex; align-items: center; gap: 4px;
-      padding: 2px 6px; border-radius: 10px;
-      font-size: 9px; font-weight: 600;
-      cursor: pointer; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-      white-space: nowrap;
-    }
-
-    .guard-status.idle {
-      background: rgba(128, 128, 128, 0.15); color: var(--fg);
-      border: 1px solid rgba(128, 128, 128, 0.3);
-    }
-
-    .guard-status.monitoring {
-      background: rgba(0, 122, 204, 0.15); color: var(--accent, #3b8eea);
-      border: 1px solid rgba(0, 122, 204, 0.35);
-    }
-
-    .guard-status.active {
-      background: rgba(35, 209, 139, 0.15); color: var(--success);
-      border: 1px solid rgba(35, 209, 139, 0.35);
-      animation: pulse 2s infinite cubic-bezier(0.25, 0, 0, 1);
-    }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(35, 209, 139, 0.4); transform: scale(1); }
-      50% { box-shadow: 0 0 0 6px rgba(35, 209, 139, 0); transform: scale(1.03); }
-      100% { box-shadow: 0 0 0 0 rgba(35, 209, 139, 0); transform: scale(1); }
-    }
-
-    .session-actions {
-      display: flex; align-items: center; gap: 3px;
-      min-width: 0; flex-shrink: 1;
-    }
-
-    .btn-circle {
-      background: none; border: none; cursor: pointer;
-      width: 22px; height: 22px; border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      color: var(--fg); opacity: 0.6;
-      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-
-    .btn-circle:hover {
-      opacity: 1;
-      background: rgba(128,128,128,0.2);
-      transform: scale(1.12);
-    }
-
-    /* Tabs Bar */
-    .tabs-bar {
-      display: flex; border-top: 1px solid var(--border);
-    }
-
-    .tab-btn {
-      flex: 1; text-align: center; padding: 10px 4px;
-      background: none; border: none; color: var(--fg);
-      font-size: 11px; font-weight: 600; cursor: pointer;
-      opacity: 0.6; position: relative;
-      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-      display: flex; align-items: center; justify-content: center; gap: 6px;
-    }
-
-    .tab-btn:hover {
-      opacity: 0.95;
-      background: rgba(128, 128, 128, 0.05);
-    }
-
-    .tab-btn.active {
-      opacity: 1;
-      background: var(--active-tab-bg);
-      color: var(--accent);
-    }
-
-    .tab-btn.active::after {
-      content: '';
-      position: absolute; bottom: 0; left: 0; width: 100%; height: 2px;
-      background: var(--accent);
-      animation: tabSlide 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-
-    @keyframes tabSlide {
-      from { transform: scaleX(0); }
-      to { transform: scaleX(1); }
-    }
-
-    .badge-count {
-      background: var(--accent); color: var(--accent-fg);
-      font-size: 9px; font-weight: 700;
-      padding: 1px 5px; border-radius: 8px;
-      display: inline-block; min-width: 15px; text-align: center;
-    }
-
-    /* Content Area */
-    .tab-content {
-      flex: 1; overflow: hidden; position: relative;
-      display: flex; flex-direction: column;
-    }
-
-    .panel {
-      display: none; width: 100%; height: 100%;
-      overflow-y: auto; padding: 12px;
-    }
-
-    .panel.active {
-      display: flex; flex-direction: column;
-      animation: fadeIn 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Terminal panel specifically fills completely */
-    #panel-terminal {
-      padding: 0;
-      min-height: 0; /* allow flex child to shrink below content size */
-    }
-
-    #terminal-wrap {
-      flex: 1;
-      min-height: 0; /* critical: without this, flex child ignores overflow */
-      width: 100%;
-      overflow: hidden;
-      padding: 4px;
-      background: var(--vscode-terminal-background, #1e1e1e);
-    }
-    /* xterm canvas layers must fill the wrap fully */
-    #terminal-wrap .xterm            { height: 100%; }
-    #terminal-wrap .xterm-viewport   { overflow-y: auto !important; }
-    #terminal-wrap .xterm-screen     { }
-    #terminal-wrap .xterm-screen     { }
-    /* xterm scrollbar — webview body overrides */
-    body::-webkit-scrollbar {
-      width: 4px;
-    }
-    body::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 2px;
-    }
-    body::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-
-    .btn-terminal-action {
-      background: rgba(128,128,128,0.15);
-      border: 1px solid rgba(128,128,128,0.2);
-      border-radius: 4px;
-      color: var(--fg); opacity: 0.7;
-      cursor: pointer; padding: 2px 5px;
-      font-size: 9px; font-weight: 600;
-      display: flex; align-items: center; gap: 2px;
-      transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-      white-space: nowrap;
-    }
-    .btn-terminal-action:not(.disabled):hover {
-      opacity: 1;
-      background: rgba(128,128,128,0.28);
-      transform: scale(1.05);
-    }
-    .btn-terminal-action.disabled,
-    .btn-icon.disabled {
-      opacity: 0.3 !important;
-      cursor: not-allowed !important;
-      pointer-events: auto; /* allow hover for title */
-    }
-    .btn-icon:not(.disabled):hover {
-      background: rgba(128,128,128,0.2);
-    }
-
-    .section-title {
-      font-size: 11px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.5px; margin-bottom: 8px; opacity: 0.5;
-    }
-
-    .session-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      margin-bottom: 10px;
-      padding: 10px 12px;
-      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-      animation: slideIn 0.35s cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
-    }
-
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(12px) scale(0.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    .session-card:hover {
-      border-color: rgba(128,128,128,0.4);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      transform: translateY(-2px);
-    }
-
-    .session-header {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 6px;
-    }
-
-    .session-name {
-      font-weight: 600; font-size: 12px;
-      display: flex; align-items: center; gap: 6px;
-    }
-
-    .session-status-badge {
-      font-size: 9px; font-weight: 700; text-transform: uppercase;
-      padding: 1px 6px; border-radius: 4px;
-    }
-    .session-status-badge.active { background: rgba(35,209,139,0.15); color: var(--success); }
-    .session-status-badge.completed { background: rgba(128,128,128,0.15); color: var(--fg); opacity: 0.7; }
-
-    .session-time {
-      font-size: 10px; opacity: 0.5; margin-bottom: 8px;
-    }
-
-    .session-files {
-      border-top: 1px solid rgba(128,128,128,0.1);
-      padding-top: 6px;
-      display: flex; flex-direction: column; gap: 4px;
-    }
-
-    .file-row {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 6px 8px; border-radius: 4px;
-      transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-      cursor: pointer;
-    }
-
-    .file-row:hover {
-      background: rgba(128,128,128,0.1);
-      transform: translateX(4px);
-    }
-
-    .file-info {
-      display: flex; align-items: center; gap: 6px; overflow: hidden;
-    }
-
-    .file-name {
-      text-overflow: ellipsis; overflow: hidden; white-space: nowrap;
-      font-weight: 500;
-    }
-
-    .file-stats {
-      font-size: 10px; opacity: 0.6; flex-shrink: 0;
-    }
-
-    .stat-add { color: var(--success); font-weight: 600; }
-    .stat-sub { color: var(--danger); font-weight: 600; }
-
-    /* Button Actions */
-    .actions-row {
-      display: flex; align-items: center; gap: 6px; margin-top: 8px;
-    }
-
-    .btn-small {
-      background: rgba(128, 128, 128, 0.1); border: 1px solid var(--border);
-      color: var(--fg); cursor: pointer; padding: 4px 8px; border-radius: 4px;
-      font-size: 10px; font-weight: 600; display: flex; align-items: center; gap: 4px;
-      transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-
-    .btn-small:hover {
-      background: rgba(128, 128, 128, 0.25);
-      transform: translateY(-1px);
-    }
-
-    .btn-small.danger:hover {
-      background: rgba(241, 76, 76, 0.18);
-      border-color: var(--danger);
-      color: #ff6e6e;
-    }
-
-    .btn-small.primary {
-      background: var(--accent); color: var(--accent-fg); border-color: transparent;
-    }
-    .btn-small.primary:hover {
-      background: var(--accent-hover);
-    }
-
-    .btn-icon {
-      background: none; border: none; cursor: pointer;
-      color: var(--fg); opacity: 0.5; padding: 2px;
-      transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-    .btn-icon:hover {
-      opacity: 1; color: var(--danger);
-      transform: scale(1.15);
-    }
-
-    .empty-state {
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: 120px; opacity: 0.5; text-align: center; gap: 8px;
-    }
-
-    .pending-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
-      margin-bottom: 8px;
-      display: flex; align-items: center; justify-content: space-between;
-      animation: slideIn 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
-      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
-
-    .pending-card:hover {
-      border-color: rgba(128, 128, 128, 0.35);
-      background: rgba(128, 128, 128, 0.09);
-      transform: translateY(-1.5px);
-    }
-
-    .pending-actions {
-      display: flex; gap: 4px;
-    }
-  </style>
-</head>
-<body>
-  <div class="nav-header">
-    <div class="top-controls">
-      <div class="brand-title">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Stavreng
-      </div>
-      <div class="session-actions">
-        <button id="btn-launch" class="btn-terminal-action" onclick="launchAgent()" title="Quick Launch AI Agent">
-          🚀 Launch
-        </button>
-        <button id="btn-new" class="btn-terminal-action" onclick="newTerminal()" title="New terminal session">
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          New
-        </button>
-        <span id="badge-guard" class="guard-status idle" onclick="toggleGuard()" title="Toggle Agent Guard State">🟢 Idle</span>
-        <button class="btn-circle" onclick="showHistory()" title="Conversation History">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        </button>
-      </div>
-    </div>
-    
-    <div class="tabs-bar">
-      <button class="tab-btn active" onclick="switchTab('terminal')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        Terminal
-      </button>
-      <button class="tab-btn" onclick="switchTab('timeline')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Timeline
-      </button>
-      <button class="tab-btn" onclick="switchTab('pending')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-        Pending <span id="badge-pending" class="badge-count" style="display:none">0</span>
-      </button>
-    </div>
-  </div>
-
-  <div class="tab-content">
-    <div id="panel-terminal" class="panel active">
-      <div id="terminal-wrap"></div>
-    </div>
-    
-    <div id="panel-timeline" class="panel">
-      <div class="section-title">Sessions Log</div>
-      <div id="timeline-list">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-
-    <div id="panel-pending" class="panel">
-      <div class="section-title">AI Changes Waiting Review</div>
-      <div id="pending-list">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-  </div>
-
-  <script>
-    (function () {
-      const vscode = acquireVsCodeApi();
-      let activeTab = 'terminal';
-      let term = null;
-      let fitAddon = null;
-      let isAgentRunning = false;
-      let isInAgentCli = false;
-      let isHistoryView = false;
-
-      // Initialize xterm.js
-      function initTerminal() {
-        const wrap = document.getElementById('terminal-wrap');
-        const diag = document.getElementById('diag-status');
-        const setStatus = (msg) => { if (diag) diag.textContent = msg; };
-        
-        setStatus('Step 1: Starting...');
-
-        // Check xterm is available
-        if (typeof Terminal === 'undefined') {
-          setStatus('ERROR: xterm.js failed to load! Check CSP / network.');
-          return;
-        }
-        setStatus('Step 2: xterm available, creating Terminal...');
-
-        let termLocal;
-        try {
-          termLocal = new Terminal({
-            cursorBlink: true,
-            scrollback: 10000,
-            fontFamily: 'Consolas, "Cascadia Code", "Courier New", monospace',
-            fontSize: 12,
-            lineHeight: 1.2,
-            convertEol: false,
-          });
-          term = termLocal;
-          setStatus('Step 3: Terminal object created');
-        } catch(e) {
-          setStatus('ERROR creating Terminal: ' + e.message);
-          return;
-        }
-
-        try {
-          if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
-            fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
-            setStatus('Step 4: FitAddon loaded');
-          } else {
-            setStatus('Step 4: FitAddon not available');
-          }
-        } catch(e) {
-          setStatus('ERROR loading FitAddon: ' + e.message);
-        }
-
-        try {
-          setStatus('Step 5: Calling term.open(wrap)...');
-          term.open(wrap);
-          setStatus('Step 6: term.open() succeeded');
-        } catch(e) {
-          setStatus('ERROR in term.open: ' + e.message);
-          return;
-        }
-
-        term.attachCustomKeyEventHandler(function (e) {
-          const isCopy = (e.ctrlKey || e.metaKey) && e.key === 'c';
-          const isCtrlA = (e.ctrlKey || e.metaKey) && e.key === 'a';
-          const isCtrlZ = (e.ctrlKey || e.metaKey) && e.key === 'z';
-          const isCtrlY = (e.ctrlKey || e.metaKey) && e.key === 'y';
-          const isCtrlX = (e.ctrlKey || e.metaKey) && e.key === 'x';
-          
-          if (isCopy) {
-            if (term.hasSelection()) {
-              if (e.type === 'keydown') {
-                const text = term.getSelection();
-                navigator.clipboard.writeText(text);
-              }
-              return false;
-            }
-          }
-
-          if (isCtrlA || isCtrlZ || isCtrlY || isCtrlX) {
-            if (e.type === 'keydown') {
-              let char = '';
-              if (e.key === 'a') char = '\\x01';
-              if (e.key === 'z') char = '\\x1a';
-              if (e.key === 'y') char = '\\x19';
-              if (e.key === 'x') char = '\\x18';
-              
-              if (char) {
-                vscode.postMessage({ command: 'input', data: char });
-              }
-            }
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          }
-          
-          return true;
-        });
-
-        function fit() {
-          try {
-            if (fitAddon) { fitAddon.fit(); }
-            vscode.postMessage({ command: 'resize', cols: term.cols, rows: term.rows });
-          } catch(e) {}
-        }
-
-        // Debounced fit: only fire at most once per animation frame to avoid
-        // the resize loop where xterm rendering changes the container height
-        // which triggers ResizeObserver which triggers PTY resize etc.
-        let fitScheduled = false;
-        function scheduleFit() {
-          if (fitScheduled) return;
-          fitScheduled = true;
-          requestAnimationFrame(() => {
-            fitScheduled = false;
-            fit();
-          });
-        }
-
-        // Initial fit — wait one frame so the layout is stable before we
-        // measure and send 'ready' (avoids 0-row terminal on first paint)
-        requestAnimationFrame(() => {
-          setStatus('Step 7: Fitting and sending ready...');
-          fit();
-          vscode.postMessage({ command: 'ready', cols: term.cols, rows: term.rows });
-          // Hide diag after ready sent - terminal should show up soon
-          setTimeout(() => { if (diag) diag.style.display = 'none'; }, 3000);
-        });
-
-        new ResizeObserver(scheduleFit).observe(wrap);
-
-        term.onData(function(data) {
-          if (isHistoryView) return;
-          vscode.postMessage({ command: 'input', data: data });
-        });
-      }
-
-      // Tab Switching with Animations
-      window.switchTab = function(tabId) {
-        if (activeTab === tabId) return;
-
-        // Deactivate old tab
-        document.querySelector('.tab-btn.active').classList.remove('active');
-        document.querySelector('.panel.active').classList.remove('active');
-
-        // Activate new tab
-        const newTabBtn = Array.from(document.querySelectorAll('.tab-btn')).find(btn => btn.outerHTML.includes(tabId));
-        if (newTabBtn) newTabBtn.classList.add('active');
-
-        const newPanel = document.getElementById('panel-' + tabId);
-        newPanel.classList.add('active');
-
-        activeTab = tabId;
-
-        // When switching TO terminal, re-fit after the DOM fully paints.
-        // Double rAF guarantees both the layout pass and the paint are done
-        // before xterm measures its container — fixes the "scattered" layout.
-        if (tabId === 'terminal' && fitAddon) {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              try {
-                fitAddon.fit();
-                vscode.postMessage({ command: 'resize', cols: term.cols, rows: term.rows });
-              } catch(e) {}
-            });
-          });
-        }
-      };
-
-      // Header Controls Callbacks
-      window.toggleGuard = function() {
-        vscode.postMessage({ command: 'toggle-agent', active: !isAgentRunning });
-      };
-      window.launchAgent = function() {
-        if (isInAgentCli) return;
-        vscode.postMessage({ command: 'launch-agent' });
-      };
-      window.showHistory = function() {
-        vscode.postMessage({ command: 'show-history' });
-      };
-      window.newTerminal = function() {
-        if (isInAgentCli) return;
-        vscode.postMessage({ command: 'new-terminal' });
-      };
-
-      // Sidebar Action delegates
-      window.stopSession = function() {
-        if (isInAgentCli) return;
-        vscode.postMessage({ command: 'stop-session' });
-      };
-      window.deleteSession = function(sessionId, e) {
-        if (e) e.stopPropagation();
-        if (isInAgentCli) return;
-        vscode.postMessage({ command: 'delete-session', sessionId });
-      };
-      window.acceptSession = function(sessionId, e) {
-        if (e) e.stopPropagation();
-        vscode.postMessage({ command: 'accept-session', sessionId });
-      };
-      window.rejectSession = function(sessionId, e) {
-        if (e) e.stopPropagation();
-        vscode.postMessage({ command: 'reject-session', sessionId });
-      };
-      window.acceptFile = function(filePath, e) {
-        if (e) e.stopPropagation();
-        vscode.postMessage({ command: 'accept-file', filePath });
-      };
-      window.rejectFile = function(filePath, e) {
-        if (e) e.stopPropagation();
-        vscode.postMessage({ command: 'reject-file', filePath });
-      };
-      window.openReview = function(filePath, e) {
-        if (e) e.stopPropagation();
-        vscode.postMessage({ command: 'open-review', filePath });
-      };
-
-      // State Rendering Functions
-      function renderTimeline(sessions) {
-        const list = document.getElementById('timeline-list');
-        if (!sessions || sessions.length === 0) {
-          list.innerHTML = \`<div class="empty-state">No historical sessions.</div>\`;
-          return;
-        }
-
-        list.innerHTML = sessions.map((s, idx) => {
-          const filesHtml = s.files.map(f => \`
-            <div class="file-row" onclick="openReview('\${f.filePath}', event)">
-              <div class="file-info">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                <span class="file-name" title="\${f.filePath}">\${f.fileName}</span>
-              </div>
-              <div class="file-stats">
-                <span class="stat-add">+\${f.added}</span>/<span class="stat-sub">-\${f.removed}</span>
-              </div>
-            </div>
-          \`).join('');
-
-          const dateStr = new Date(s.startedAt).toLocaleString();
-          const badgeClass = s.status === 'ACTIVE' ? 'active' : 'completed';
-          
-          let headerActions = '';
-          if (s.hasPending) {
-            headerActions = \`
-              <div class="actions-row">
-                <button class="btn-small primary" onclick="acceptSession('\${s.id}', event)">Accept All</button>
-                <button class="btn-small" onclick="rejectSession('\${s.id}', event)">Reject All</button>
-              </div>
-            \`;
-          }
-
-          const btnClass = isInAgentCli ? 'btn-icon disabled' : 'btn-icon';
-          const stopTitle = isInAgentCli ? 'The agent is running, stop the agent first before you can close this session' : 'Stop Session';
-          const deleteTitle = isInAgentCli ? 'The agent is running, stop the agent first before you can close this session' : 'Delete Session';
-
-          const cardActions = s.status === 'ACTIVE'
-            ? \`<button class="\${btnClass} btn-stop-session" onclick="stopSession()" title="\${stopTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16"/></svg></button>\`
-            : \`<button class="\${btnClass} btn-stop-session" onclick="deleteSession('\${s.id}', event)" title="\${deleteTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>\`;
-
-          return \`
-            <div class="session-card" style="animation-delay: \${idx * 0.05}s">
-              <div class="session-header">
-                <span class="session-name">
-                  \${s.agentName}
-                  <span class="session-status-badge \${badgeClass}">\${s.status}</span>
-                </span>
-                \${cardActions}
-              </div>
-              <div class="session-time">\${dateStr}</div>
-              <div class="session-files">
-                \${filesHtml}
-              </div>
-              \${headerActions}
-            </div>
-          \`;
-        }).join('');
-      }
-
-      function renderPending(pendingFiles) {
-        const list = document.getElementById('pending-list');
-        const badgePending = document.getElementById('badge-pending');
-        
-        let pendingCount = 0;
-        pendingFiles.forEach(f => pendingCount += f.count);
-
-        if (pendingCount > 0) {
-          badgePending.textContent = pendingCount;
-          badgePending.style.display = 'inline-block';
-        } else {
-          badgePending.style.display = 'none';
-        }
-
-        if (!pendingFiles || pendingFiles.length === 0) {
-          list.innerHTML = \`<div class="empty-state">No changes pending review.</div>\`;
-          return;
-        }
-
-        list.innerHTML = pendingFiles.map((f, idx) => \`
-          <div class="pending-card" style="animation-delay: \${idx * 0.04}s" onclick="openReview('\${f.filePath}', event)">
-            <div class="file-info" style="flex:1">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              <span class="file-name" title="\${f.filePath}">\${f.fileName}</span>
-              <span class="badge-count" style="margin-left:4px; font-size:9px">\${f.count}</span>
-            </div>
-            <div class="pending-actions">
-              <button class="btn-small primary" onclick="acceptFile('\${f.filePath}', event)">Accept</button>
-              <button class="btn-small danger" onclick="rejectFile('\${f.filePath}', event)">Reject</button>
-            </div>
-          </div>
-        \`).join('');
-      }
-
-      // Backend Message Listener
-      window.addEventListener('message', function (event) {
-        const msg = event.data;
-        switch (msg.command) {
-          case 'output': {
-            const diag2 = document.getElementById('diag-status');
-            if (diag2 && diag2.style.display !== 'none') {
-              diag2.textContent = 'OUTPUT received: ' + msg.data.length + ' bytes. term=' + (term ? 'ok' : 'NULL');
-            }
-            if (term) term.write(msg.data);
-            break;
-          }
-          case 'new-terminal':
-            if (term) {
-              term.clear();
-              term.reset();
-            }
-            break;
-          case 'show-history-view':
-            if (term) {
-              term.clear();
-              term.reset();
-              isHistoryView = true;
-
-              // Add the Read-Only Banner
-              let banner = document.getElementById('history-banner');
-              if (!banner) {
-                banner = document.createElement('div');
-                banner.id = 'history-banner';
-                banner.style.position = 'absolute';
-                banner.style.top = '0';
-                banner.style.left = '0';
-                banner.style.right = '0';
-                banner.style.padding = '6px 10px';
-                banner.style.background = 'var(--vscode-editorError-background, rgba(255, 50, 50, 0.15))';
-                banner.style.color = 'var(--vscode-editorError-foreground, #ff8080)';
-                banner.style.borderBottom = '1px solid var(--vscode-editorError-border, rgba(255, 50, 50, 0.4))';
-                banner.style.zIndex = '100';
-                banner.style.display = 'flex';
-                banner.style.justifyContent = 'space-between';
-                banner.style.alignItems = 'center';
-                banner.style.fontSize = '11px';
-                banner.style.fontWeight = '600';
-                
-                const titleSpan = document.createElement('span');
-                banner.appendChild(titleSpan);
-
-                const backBtn = document.createElement('button');
-                backBtn.innerHTML = '⬅ Back to Active Terminal';
-                backBtn.className = 'btn-small primary';
-                backBtn.onclick = () => {
-                  banner.style.display = 'none';
-                  isHistoryView = false;
-                  vscode.postMessage({ command: 'resume-active-terminal' });
-                };
-                banner.appendChild(backBtn);
-                
-                const wrap = document.getElementById('terminal-wrap');
-                wrap.style.position = 'relative';
-                wrap.appendChild(banner);
-              }
-              
-              banner.children[0].textContent = 'Read-Only History: ' + msg.title;
-              banner.style.display = 'flex';
-
-              // Disable main header buttons
-              document.getElementById('btn-launch')?.classList.add('disabled');
-              document.getElementById('btn-new')?.classList.add('disabled');
-              
-              // Render text
-              term.write(msg.data);
-              
-              // Switch to terminal tab
-              switchTab('terminal');
-            }
-            break;
-          case 'status':
-            isAgentRunning = msg.active;
-            isInAgentCli = msg.inCli;
-            const badge = document.getElementById('badge-guard');
-            
-            if (isInAgentCli) {
-              if (isAgentRunning) {
-                badge.className = 'guard-status active';
-                badge.textContent = '🤖 Running';
-              } else {
-                badge.className = 'guard-status monitoring';
-                badge.textContent = '🤖 Active';
-              }
-            } else {
-              badge.className = 'guard-status idle';
-              badge.textContent = '🟢 Idle';
-            }
-            
-            // Disable UI elements while running or active
-            const btnLaunch = document.getElementById('btn-launch');
-            const btnNew = document.getElementById('btn-new');
-            const stopBtns = document.querySelectorAll('.btn-stop-session');
-            
-            if (isInAgentCli) {
-              if (btnLaunch) {
-                btnLaunch.classList.add('disabled');
-                btnLaunch.title = 'The agent is running, stop the agent first before you can launch another agent';
-              }
-              if (btnNew) {
-                btnNew.classList.add('disabled');
-                btnNew.title = 'The agent is running, stop the agent first before you can open a new terminal';
-              }
-              stopBtns.forEach(btn => {
-                btn.classList.add('disabled');
-                btn.title = 'The agent is running, stop the agent first before you can close this session';
-              });
-            } else {
-              if (btnLaunch) {
-                btnLaunch.classList.remove('disabled');
-                btnLaunch.title = 'Quick Launch AI Agent';
-              }
-              if (btnNew) {
-                btnNew.classList.remove('disabled');
-                btnNew.title = 'New terminal session';
-              }
-              stopBtns.forEach(btn => {
-                btn.classList.remove('disabled');
-                btn.title = btn.onclick && btn.onclick.toString().includes('deleteSession') ? 'Delete Session' : 'Stop Session';
-              });
-            }
-            break;
-          case 'state':
-            renderTimeline(msg.sessions);
-            renderPending(msg.pendingFiles);
-            // Remove start/stop UI toggling logic as it has been replaced by History
-            break;
-        }
-      });
-
-      // Launch
-      initTerminal();
-    })();
-  </script>
-</body>
-</html>`;
+    const xtermCssUri    = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm',        'css', 'xterm.css'));
+    const xtermJsUri     = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm',        'lib', 'xterm.js'));
+    const xtermFitJsUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'addon-fit',   'lib', 'addon-fit.js'));
+    const sidebarCssUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'src', 'ui', 'sidebar.css'));
+
+    const extensionRoot = this.context.extensionUri.fsPath;
+    const htmlTemplate  = fs.readFileSync(path.join(extensionRoot, 'src', 'ui', 'sidebar.html'), 'utf8');
+
+    return htmlTemplate
+      .replace(/{{CSP_SOURCE}}/g,    webview.cspSource)
+      .replace('{{XTERM_CSS_URI}}',  xtermCssUri.toString())
+      .replace('{{XTERM_JS_URI}}',   xtermJsUri.toString())
+      .replace('{{XTERM_FIT_JS_URI}}', xtermFitJsUri.toString())
+      .replace('{{SIDEBAR_CSS_URI}}', sidebarCssUri.toString());
   }
 }
 

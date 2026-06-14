@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { LineOwnershipRepository } from '../db/lineOwnership.js';
 import { PatchesRepository } from '../db/patches.js';
 
 export class GutterDecorator {
@@ -8,15 +7,11 @@ export class GutterDecorator {
   private aiRemovedDecoration: vscode.TextEditorDecorationType;
 
   constructor(
-    lineOwnershipRepo: LineOwnershipRepository,
     patchesRepo: PatchesRepository
   ) {
     this.aiAddedDecoration = vscode.window.createTextEditorDecorationType({});
     this.aiModifiedDecoration = vscode.window.createTextEditorDecorationType({});
     this.aiRemovedDecoration = vscode.window.createTextEditorDecorationType({});
-
-    // Dummy usage to satisfy strict compiler rules
-    void lineOwnershipRepo;
     void patchesRepo;
   }
 

@@ -7,23 +7,21 @@ import { SafeDatabase } from './db/engine.js';
 import { SessionsRepository } from './db/sessions.js';
 import { FileStatesRepository } from './db/fileStates.js';
 import { PatchesRepository } from './db/patches.js';
-import { LineOwnershipRepository } from './db/lineOwnership.js';
 import { normalizePath } from './db/pathUtils.js';
 
 import { JournalManager } from './engine/journal.js';
 import { WorkspaceWatcher } from './engine/watcher.js';
-import { HumanTracker } from './engine/tracker.js';
 import { SessionCoordinator } from './engine/coordinator.js';
 import { BaseDocumentProvider } from './engine/provider.js';
 
-import { HunkRollbackExecutor } from './merge/rollback.js';
+import { StringEditTracker, HunkRollbackExecutor } from './vcs/index.js';
 
 import { GutterDecorator } from './ui/decorations.js';
 import { StavrengReviewWebview } from './ui/webview.js';
 import { StavrengSidebarProvider } from './ui/sidebarWebview.js';
 import { StavrengStatusBarManager } from './ui/statusBar.js';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   console.log('Stavreng extension: activate() called!');
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -50,7 +48,6 @@ export function activate(context: vscode.ExtensionContext) {
     const sessionsRepo = new SessionsRepository(db);
     const fileStatesRepo = new FileStatesRepository(db);
     const patchesRepo = new PatchesRepository(db);
-    const lineOwnershipRepo = new LineOwnershipRepository(db);
 
     // Initialize Engines & UI managers
     const journalManager = new JournalManager(dbStoragePath);
@@ -61,22 +58,31 @@ export function activate(context: vscode.ExtensionContext) {
       sessionsRepo,
       patchesRepo
     );
-  
+
+    // StringEditTracker replaces HumanTracker + lineOwnershipRepo.
+    // It tracks human keystrokes and accumulated AI edits per file using
+    // the same StringEdit algebra VS Code uses internally.
+    const stringEditTracker = new StringEditTracker();
+    stringEditTracker.start();
+    context.subscriptions.push({ dispose: () => stringEditTracker.stop() });
+
     const watcher = new WorkspaceWatcher(
       workspacePath,
       sessionsRepo,
       fileStatesRepo,
       patchesRepo,
-      lineOwnershipRepo,
       journalManager,
-      sidebarProvider
+      sidebarProvider,
+      stringEditTracker
     );
-  
-    const tracker = new HumanTracker(lineOwnershipRepo);
-    const coordinator = new SessionCoordinator(sessionsRepo, watcher, tracker);
-    const rollbackExecutor = new HunkRollbackExecutor(patchesRepo, lineOwnershipRepo, journalManager, fileStatesRepo);
 
-    const gutterDecorator = new GutterDecorator(lineOwnershipRepo, patchesRepo);
+    const coordinator = new SessionCoordinator(sessionsRepo, watcher);
+    const rollbackExecutor = new HunkRollbackExecutor(
+      patchesRepo, journalManager, fileStatesRepo,
+      (filePath) => watcher.suppressNextChangeFor(filePath)
+    );
+
+    const gutterDecorator = new GutterDecorator(patchesRepo);
     const statusBarManager = new StavrengStatusBarManager(sessionsRepo, patchesRepo);
     context.subscriptions.push(statusBarManager);
 
@@ -204,8 +210,8 @@ export function activate(context: vscode.ExtensionContext) {
         const activeSession = coordinator.getActiveSession();
         if (!activeSession) {
           // No active session: Start a new tracking session immediately and silently
-          coordinator.startSession('AI Agent', workspacePath);
-          vscode.window.showInformationMessage('Stavreng: Started new tracking session.');
+          const session = await coordinator.startSession('AI Agent', workspacePath);
+          vscode.window.showInformationMessage(`Stavreng: Session started for ${session.agentName}`);
           
           sidebarProvider.refresh();
           if (vscode.window.activeTextEditor) {
@@ -278,7 +284,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     if (!agentName) return;
 
-    coordinator.startSession(agentName, workspacePath);
+    await coordinator.startSession(agentName, workspacePath);
     sidebarProvider.setAgentRunning(true);
     vscode.window.showInformationMessage(`Stavreng is now tracking mutations from: ${agentName}`);
     sidebarProvider.refresh();
@@ -706,15 +712,12 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     // 2. Delete patches of this session
-    const sessionPatches = patchesRepo.getBySession(sessionId);
-    const patchIds = new Set(sessionPatches.map(p => p.id));
     patchesRepo.deleteBySession(sessionId);
 
     // 3. Delete file states of this session
     fileStatesRepo.deleteBySession(sessionId);
 
-    // 4. Delete line ownership records referencing this session's patches
-    lineOwnershipRepo.deleteByPatchIds(patchIds);
+    // Line ownership is no longer tracked — nothing else to clean up here.
 
     if (!forceSilent) {
       vscode.window.showInformationMessage(`Session "${session.agentName}" was successfully deleted.`);
@@ -738,6 +741,20 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Resume coordinator if there was an active session before restart
   coordinator.getActiveSession();
+
+  // ── Snapshot workspace & reveal terminal ─────────────────────────────
+  // This runs AFTER all commands are registered so the terminal is available
+  // but still BEFORE the user can interact with it (the spinner is shown).
+  // Once snapshotWorkspace resolves, every file has a baseline and we can
+  // safely let agents make edits without any race conditions.
+  watcher.snapshotWorkspace().then(() => {
+    sidebarProvider.setExtensionReady();
+    console.log('[Stavreng] Workspace indexed. Terminal is now ready.');
+  }).catch(err => {
+    console.error('[Stavreng] Snapshot failed, revealing terminal anyway:', err);
+    sidebarProvider.setExtensionReady();
+  });
+
   } catch (err) {
     console.error('Stavreng extension activation failed:', err);
   }
