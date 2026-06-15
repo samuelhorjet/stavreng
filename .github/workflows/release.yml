@@ -2,8 +2,10 @@ name: Release VSIX
 
 on:
   push:
-    tags:
-      - 'v*' # This triggers the workflow ONLY when you push a tag that starts with 'v', like v1.0.0
+    branches:
+      - main
+    paths:
+      - 'package.json'
 
 permissions:
   contents: write
@@ -16,28 +18,55 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Check version and create tag
+        id: check_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+            echo "Tag $TAG already exists. Skipping release."
+            echo "create_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG does not exist. We will create it."
+            echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+            echo "create_release=true" >> $GITHUB_OUTPUT
+            
+            # Configure git so we can push the tag
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # Create and push tag back to the repository
+            git tag $TAG
+            git push origin $TAG
+          fi
+
       - name: Setup Node.js
+        if: steps.check_version.outputs.create_release == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
           cache: 'npm'
 
       - name: Install Dependencies
+        if: steps.check_version.outputs.create_release == 'true'
         run: npm ci
 
       - name: Package Extension
-        # Uses npx to run vsce without needing to install it globally
+        if: steps.check_version.outputs.create_release == 'true'
         run: npx @vscode/vsce package
 
       - name: Get VSIX file name
+        if: steps.check_version.outputs.create_release == 'true'
         id: get_vsix
         run: |
           VSIX_FILE=$(ls *.vsix | head -n 1)
           echo "filename=$VSIX_FILE" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
+        if: steps.check_version.outputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.check_version.outputs.tag_name }}
           files: ${{ steps.get_vsix.outputs.filename }}
           generate_release_notes: true
         env:
