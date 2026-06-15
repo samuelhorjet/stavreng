@@ -14,6 +14,7 @@ import { StringEditTracker } from '../vcs/stringEditTracker.js';
 export class WorkspaceWatcher {
   private watcher: vscode.FileSystemWatcher | null = null;
   private diffEngine: DiffEngine;
+  private uiDeletions: Set<string> = new Set();
 
   /**
    * Pre-change content cache.
@@ -31,6 +32,8 @@ export class WorkspaceWatcher {
 
   /** True once snapshotWorkspace() has completed. The terminal gate reads this. */
   public isReady = false;
+  private readyPromise: Promise<void> | null = null;
+  private resolveReady: (() => void) | null = null;
 
   /**
    * Call this BEFORE writing a file from a rollback or accept operation.
@@ -89,6 +92,18 @@ export class WorkspaceWatcher {
         if (!this.stringEditTracker.isSuppressed(normPath)) {
           this.contentCache.set(normPath, doc.getText());
         }
+      }
+    });
+
+    // ── UI Deletion Tracking ──────────────────────────────────────────────
+    // When a human deletes a file via VS Code File Explorer, this API event fires.
+    // Terminal deletions (e.g. `rm`) do NOT fire this event.
+    vscode.workspace.onDidDeleteFiles(event => {
+      for (const file of event.files) {
+        const normPath = normalizePath(file.fsPath);
+        this.uiDeletions.add(normPath);
+        // Clear it after a few seconds to avoid memory leaks if the watcher missed it
+        setTimeout(() => this.uiDeletions.delete(normPath), 5000);
       }
     });
   }
@@ -151,6 +166,11 @@ export class WorkspaceWatcher {
   public async snapshotWorkspace(): Promise<void> {
     if (!this.workspacePath) return;
 
+    this.isReady = false;
+    this.readyPromise = new Promise<void>(resolve => {
+      this.resolveReady = resolve;
+    });
+
     const excludeGlob = this.ignoreManager.getExcludeGlob();
 
     try {
@@ -179,6 +199,10 @@ export class WorkspaceWatcher {
       console.error('[Stavreng] Failed to snapshot workspace:', err);
     } finally {
       this.isReady = true;
+      if (this.resolveReady) {
+        this.resolveReady();
+        this.resolveReady = null;
+      }
     }
   }
 
@@ -190,13 +214,8 @@ export class WorkspaceWatcher {
     // baseline yet. Defer this event until the snapshot is ready.
     // Without this gate, an agent that starts writing immediately after session
     // start would get empty string as the baseline for every file.
-    if (!this.isReady) {
-      const waitForReady = () => new Promise<void>(resolve => {
-        const interval = setInterval(() => {
-          if (this.isReady) { clearInterval(interval); resolve(); }
-        }, 100);
-      });
-      await waitForReady();
+    if (!this.isReady && this.readyPromise) {
+      await this.readyPromise;
     }
 
     // ── Suppress rollback/accept writes ─────────────────────────────────────
@@ -205,7 +224,7 @@ export class WorkspaceWatcher {
     if (this.stringEditTracker.isSuppressed(filePath)) {
       this.stringEditTracker.consumeSuppression(filePath);
       if (fs.existsSync(filePath)) {
-        const content = overrideCurrentContent ?? fs.readFileSync(filePath, 'utf8');
+        const content = overrideCurrentContent ?? await fs.promises.readFile(filePath, 'utf8');
         this.contentCache.set(filePath, content);
       }
       return;
@@ -225,7 +244,7 @@ export class WorkspaceWatcher {
       if (!fs.existsSync(filePath)) return;
 
       // ── Determine current content ───────────────────────────────────────
-      const currentContent = overrideCurrentContent ?? fs.readFileSync(filePath, 'utf8');
+      const currentContent = overrideCurrentContent ?? await fs.promises.readFile(filePath, 'utf8');
 
       // ── Determine baseline content ──────────────────────────────────────
       let fileState = this.fileStatesRepo.getByFileAndSession(filePath, activeSession.id);
@@ -235,7 +254,7 @@ export class WorkspaceWatcher {
         baseContent = this.getBaselineContent(filePath);
         console.log(`[Stavreng] New file in session. baseLen=${baseContent.length} currentLen=${currentContent.length}`);
 
-        const baseSha256 = this.journalManager.createBackup(filePath, baseContent);
+        const baseSha256 = this.journalManager.createBackup(baseContent);
         fileState = {
           filePath,
           sessionId: activeSession.id,
@@ -268,9 +287,18 @@ export class WorkspaceWatcher {
       //
       // NOTE: consumeHumanSave also returns false when agent is idle — we check
       // isAgentRunning() separately for that case.
-      let isHumanSave = this.stringEditTracker.consumeHumanSave(filePath);
-      if (!this.terminalProvider.isAgentRunning()) {
-        isHumanSave = true;
+      let isHumanSave = false;
+      
+      if (this.terminalProvider.isManualTracking) {
+        // If manual tracking is active for an extension agent, we cannot distinguish
+        // between user typing and extension typing (both use VS Code APIs). 
+        // We force all edits to be treated as AI writes.
+        this.stringEditTracker.consumeHumanSave(filePath); // consume to clear state
+      } else {
+        isHumanSave = this.stringEditTracker.consumeHumanSave(filePath);
+        if (!this.terminalProvider.isAgentRunning()) {
+          isHumanSave = true;
+        }
       }
 
       if (isHumanSave) {
@@ -415,7 +443,7 @@ export class WorkspaceWatcher {
 
         const newBaseContent = newBaseLines.join('\n');
 
-        const newBaseSha256 = this.journalManager.createBackup(filePath, newBaseContent);
+        const newBaseSha256 = this.journalManager.createBackup(newBaseContent);
         fileState.baseSha256 = newBaseSha256;
         this.fileStatesRepo.upsert(fileState);
         baseContent = newBaseContent;
@@ -446,8 +474,6 @@ export class WorkspaceWatcher {
         // No line ownership check needed — StringEditTracker has the correct state.
         console.log('[Stavreng] AI write detected — creating patches for:', filePath);
 
-        const oldCachedContent = this.contentCache.get(filePath) ?? baseContent;
-
         hunks.forEach((hunk, idx) => {
           const patchId = `patch_${activeSession.id}_${Date.now()}_${idx}`;
           this.patchesRepo.create({
@@ -458,10 +484,6 @@ export class WorkspaceWatcher {
             hunkDiff: hunk.hunkDiff, rawOriginal: hunk.rawOriginal, rawModified: hunk.rawModified
           });
         });
-
-        // Notify tracker that the AI wrote this file.
-        // (Character-level tracking retired; this is now a no-op stub.)
-        this.stringEditTracker.onAIWroteFile(filePath, oldCachedContent, currentContent);
       }
 
       // ── Update file state ──────────────────────────────────────────────
@@ -483,27 +505,26 @@ export class WorkspaceWatcher {
   private async handleFileDelete(filePath: string): Promise<void> {
     filePath = normalizePath(filePath);
 
-    if (
-      filePath.includes('/.stavreng/') ||
-      filePath.includes('/node_modules/') ||
-      filePath.includes('/.git/') ||
-      filePath.endsWith('/target') ||
-      filePath.includes('/target/') ||
-      filePath.includes('/dist/') ||
-      filePath.includes('/out/') ||
-      filePath.includes('.tmp') ||
-      filePath.endsWith('~') ||
-      filePath.endsWith('.bak')
-    ) {
+    if (this.ignoreManager.shouldIgnorePath(filePath)) {
       return;
     }
 
     const activeSession = this.sessionsRepo.getActiveSession();
     if (!activeSession) return;
 
-    let isHumanDelete = this.stringEditTracker.consumeHumanSave(filePath);
-    if (!this.terminalProvider.isAgentRunning()) {
+    let isHumanDelete = false;
+
+    // Definitively check if this was a human UI deletion (VS Code File Explorer)
+    if (this.uiDeletions.has(filePath)) {
       isHumanDelete = true;
+      this.uiDeletions.delete(filePath);
+    } else {
+      isHumanDelete = false;
+    }
+
+    // Force AI tracking if manual tracking is explicitly on
+    if (this.terminalProvider.isManualTracking) {
+      isHumanDelete = false;
     }
 
     try {

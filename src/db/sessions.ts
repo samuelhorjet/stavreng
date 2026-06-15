@@ -17,11 +17,11 @@ export class SessionsRepository {
     return this.db.getSessions().find(s => s.status === 'ACTIVE');
   }
 
-  public updateStatus(id: string, status: Session['status'], endedAt?: string): void {
+  public updateStatus(id: string, status: Session['status'], endedAt?: string | null): void {
     const session = this.getById(id);
     if (session) {
       session.status = status;
-      if (endedAt) {
+      if (endedAt !== undefined) {
         session.endedAt = endedAt;
       }
       this.db.save();

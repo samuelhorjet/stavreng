@@ -4,13 +4,13 @@
   <h1>Stavreng</h1>
   
   <p><strong>The ultimate AI-Agent oversight and tracking extension for VS Code (and compatible IDEs).</strong></p>
-  <p>Stop letting CLI AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. It is especially powerful for users running Local LLMs, but is equally useful for tracking any standard CLI coding agent (like Claude Code, Aider, etc.). Works seamlessly in VS Code, Antigravity, Cursor, VSCodium, and other compatible IDEs.</p>
+  <p>Stop letting AI agents blindly overwrite your codebase. Stavreng gives you full transparency and granular control over every single line of code your AI tries to modify. It works seamlessly for tracking agents running natively in VS Code extensions (like Cline or RooCode) as well as any standard CLI coding agent (like Claude Code, Aider, etc.) running in your terminal. Works seamlessly in VS Code, Antigravity, Cursor, VSCodium, and other compatible IDEs.</p>
 </div>
 
 ---
 
 ## ✨ Why Stavreng?
-When you run a coding agent in a standard terminal, it edits your files directly on disk. If it makes a mistake, clobbers a recent change you made, or rewrites a function poorly, your only defense is digging through `git diff` manually or relying on massive `git undo` commands that wipe out your own manual work too.
+When you run a coding agent in a standard terminal or via a VS Code extension, it edits your files directly on disk. If it makes a mistake, clobbers a recent change you made, or rewrites a function poorly, your only defense is digging through `git diff` manually or relying on massive `git undo` commands that wipe out your own manual work too.
 
 Stavreng fixes this by intercepting those changes locally and treating them as **"Pending Proposals"**.
 
@@ -23,23 +23,25 @@ Stavreng fixes this by intercepting those changes locally and treating them as *
 
 ## 📦 Installation
 
-Since this extension is currently in open-source beta, you can install it manually:
+You can install Stavreng directly from the VS Code Marketplace:
 
-1.  Go to the [Releases](https://github.com/samuelhorjet/stavreng/releases/) page of this GitHub repository.
-2.  Download the latest `stavreng-x.x.x.vsix` file.
-3.  Open VS Code, go to the **Extensions** panel.
-4.  Click the `...` menu at the top right and select **Install from VSIX**.
-5.  Select the downloaded file.
+1. Open VS Code and go to the **Extensions** panel (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+2. Search for **Stavreng**.
+3. Click **Install**.
+
+*(Alternatively, you can download the latest `.vsix` file from the [Releases](https://github.com/samuelhorjet/stavreng/releases/) page and install it manually via "Install from VSIX" in the Extensions panel).*
 
 ## 🎯 How to Use
 
 1.  Open the Stavreng icon in your VS Code Activity Bar.
     * **Pro Tip:** For the best agentic workflow, right-click the Stavreng icon and select **Move to Secondary Side Bar**. This allows you to keep your main file explorer open on the left while tracking the AI on the right!
-2.  In the terminal at the bottom, launch your favorite agent (e.g. type `claude` or run your local LLM CLI).
+2.  **Start a Tracking Session:**
+    * **For Terminal CLI Agents:** Click the "Launch" button to start an agent, or type the command (like `claude`) natively in the integrated terminal. Stavreng will automatically detect the CLI agent and start tracking.
+    * **For VS Code Extension Agents:** Because extensions run natively and edit files without an interactive shell, Stavreng cannot automatically detect when they are running. You must manually click the **Track** button at the top of the session panel to start a session *before* prompting your extension agent.
 3.  Ask the AI to build something!
 4.  As the AI modifies your files, you will see the changes tracked in the UI above the terminal as "Pending".
 5.  Click a specific file to review the diff side-by-side. Use the **Accept All** (check) or **Reject All** (trash) buttons to approve or revert changes.
-6.  When you are done, click **New Terminal** to safely clear the session and start fresh.
+6.  When you are done, click **New Terminal** or toggle off the **Track** button to safely clear the session and start fresh.
 
 ## ⚠️ Important Cautions & Best Practices
 
@@ -54,4 +56,4 @@ We welcome open-source contributions! To get started:
 4. Press `F5` in VS Code to launch the Extension Development Host and test your changes live.
 
 ---
-**License:** ISC
+**License:** MIT

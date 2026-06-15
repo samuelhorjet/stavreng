@@ -299,7 +299,7 @@ body::-webkit-scrollbar-track { background: transparent; }
   background: none; border: none; cursor: pointer;
   color: var(--fg); opacity: 0.45; padding: 2px;
   display: flex; align-items: center; justify-content: center;
-  transition: opacity 0.2s, transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: opacity 0.25s, transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
   flex-shrink: 0;
 }
 .btn-expand:hover { opacity: 0.9; }

@@ -27,7 +27,7 @@ export class JournalManager {
    * Creates a backup of a file's current content.
    * Returns the SHA256 hash of the content.
    */
-  public createBackup(_filePath: string, content: string): string {
+  public createBackup(content: string): string {
     const sha256 = this.calculateHash(content);
     const backupPath = path.join(this.journalDir, `${sha256}.base`);
 

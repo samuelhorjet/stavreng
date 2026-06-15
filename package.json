@@ -1,18 +1,20 @@
 {
   "name": "stavreng",
   "displayName": "Stavreng",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "license": "MIT",
   "description": "The ultimate AI-Agent oversight and tracking extension for VS Code.",
   "publisher": "samuelhorjet",
   "repository": {
     "type": "git",
     "url": "https://github.com/samuelhorjet/stavreng.git"
   },
-  "icon": "media/stavreng-icon.ico",
+  "icon": "media/stavreng-icon.png",
   "engines": {
     "vscode": "^1.107.0"
   },
   "categories": [
+    "SCM Providers",
     "Other"
   ],
   "activationEvents": [
@@ -38,11 +40,7 @@
         "title": "Stavreng: Show Timeline",
         "category": "Stavreng"
       },
-      {
-        "command": "stavreng.reviewHunks",
-        "title": "Stavreng: Review Pending Changes",
-        "category": "Stavreng"
-      },
+
       {
         "command": "stavreng.acceptAllSession",
         "title": "Accept All",
@@ -89,7 +87,7 @@
         {
           "id": "stavreng-explorer",
           "title": "Stavreng",
-          "icon": "media/stavreng-icon.ico"
+          "icon": "media/stavreng-icon.png"
         }
       ]
     },
@@ -99,7 +97,7 @@
           "id": "stavreng-sidebar",
           "name": "Stavreng",
           "type": "webview",
-          "icon": "media/stavreng-icon.ico"
+          "icon": "media/stavreng-icon.png"
         }
       ]
     },
@@ -111,21 +109,7 @@
         "mac": "cmd+alt+s"
       }
     ],
-    "configuration": {
-      "title": "Stavreng",
-      "properties": {
-        "stavreng.trackingDelayMs": {
-          "type": "number",
-          "default": 1000,
-          "description": "Delay in milliseconds after filesystem write before diffing."
-        },
-        "stavreng.enableGutterDecorations": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable green, yellow, and red gutter line markers for AI changes."
-        }
-      }
-    }
+    "configuration": {}
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -136,17 +120,21 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "diff-match-patch": "^1.0.5",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "@types/diff-match-patch": "^1.0.36",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.107.0",
     "typescript": "^5.7.3"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "ai",
+    "agent",
+    "code review",
+    "diff",
+    "tracking",
+    "git"
+  ],
+  "author": "samuelhorjet",
   "type": "commonjs"
 }

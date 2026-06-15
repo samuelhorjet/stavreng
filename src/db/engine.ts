@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { DatabaseSchema, Session, FileState, Patch, LineOwnership } from './types.js';
+import { DatabaseSchema, Session, FileState, Patch } from './types.js';
 import { normalizePath } from './pathUtils.js';
 
 export class SafeDatabase {
@@ -14,8 +14,7 @@ export class SafeDatabase {
     this.schema = {
       sessions: [],
       fileStates: [],
-      patches: [],
-      lineOwnership: []
+      patches: []
     };
     this.init();
   }
@@ -48,12 +47,8 @@ export class SafeDatabase {
           ...p,
           filePath: normalizePath(p.filePath)
         }));
-        const lineOwnership = (parsed.lineOwnership || []).map((lo: any) => ({
-          ...lo,
-          filePath: normalizePath(lo.filePath)
-        }));
 
-        this.schema = { sessions, fileStates, patches, lineOwnership };
+        this.schema = { sessions, fileStates, patches };
         this.save(); // Save the cleaned/normalized records back to disk
       } catch (err) {
         console.error('Stavreng DB initialization failed, recreating database', err);
@@ -85,9 +80,5 @@ export class SafeDatabase {
 
   public getPatches(): Patch[] {
     return this.schema.patches;
-  }
-
-  public getLineOwnership(): LineOwnership[] {
-    return this.schema.lineOwnership;
   }
 }

@@ -1,0 +1,73 @@
+# .stavreng-ignore
+# Stavreng will not track changes to paths matching these patterns.
+# Each line is a path segment or glob pattern. Lines starting with # are comments.
+# You can commit this file to share ignore rules with your team.
+#
+# Examples:
+#   node_modules/    — ignore a directory
+#   *.lock           — ignore all .lock files
+#   build/           — ignore a build output directory
+
+# Package managers
+node_modules/
+.pnp/
+
+# Version control
+.git/
+
+# Compiled output & build artifacts
+target/
+dist/
+out/
+build/
+.next/
+.nuxt/
+.output/
+__pycache__/
+*.pyc
+
+# Logs & temporary files
+*.log
+*.tmp
+*.bak
+*~
+
+# Lock files (large, not human-edited)
+*.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Cargo.lock
+
+# Database & binary files
+*.db
+*.db-journal
+*.db-wal
+*.vsix
+*.exe
+*.dll
+*.bin
+*.zip
+*.tar
+*.gz
+
+# Media files
+*.ico
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.mp4
+*.webm
+*.woff
+*.woff2
+
+# IDE / OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Stavreng internal
+.stavreng/

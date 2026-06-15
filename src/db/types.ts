@@ -30,17 +30,8 @@ export interface Patch {
   rawModified: string;
 }
 
-export interface LineOwnership {
-  filePath: string;
-  lineNumber: number;
-  owner: 'HUMAN' | 'AI';
-  associatedPatchId: string | null;
-  lastUpdatedAt: number;
-}
-
 export interface DatabaseSchema {
   sessions: Session[];
   fileStates: FileState[];
   patches: Patch[];
-  lineOwnership: LineOwnership[];
 }

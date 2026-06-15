@@ -88,12 +88,7 @@ export class StringEditTracker {
 
   // ─── State updates ────────────────────────────────────────────────────────
 
-  /**
-   * No-op stub maintained for interface compatibility.
-   */
-  public onAIWroteFile(_filePath: string, _oldContent: string, _newContent: string): void {
-    // Character-level tracking retired in favor of line-level hunk matching.
-  }
+
 
   /**
    * Called after human save is complete — resets edit state for the file.

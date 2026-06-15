@@ -16,7 +16,6 @@ import { BaseDocumentProvider } from './engine/provider.js';
 
 import { StringEditTracker, HunkRollbackExecutor } from './vcs/index.js';
 
-import { GutterDecorator } from './ui/decorations.js';
 import { StavrengReviewWebview } from './ui/webview.js';
 import { StavrengSidebarProvider } from './ui/sidebarWebview.js';
 import { StavrengStatusBarManager } from './ui/statusBar.js';
@@ -82,7 +81,6 @@ export async function activate(context: vscode.ExtensionContext) {
       (filePath) => watcher.suppressNextChangeFor(filePath)
     );
 
-    const gutterDecorator = new GutterDecorator(patchesRepo);
     const statusBarManager = new StavrengStatusBarManager(sessionsRepo, patchesRepo);
     context.subscriptions.push(statusBarManager);
 
@@ -214,20 +212,13 @@ export async function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(`Stavreng: Session started for ${session.agentName}`);
           
           sidebarProvider.refresh();
-          if (vscode.window.activeTextEditor) {
-            gutterDecorator.refresh(vscode.window.activeTextEditor);
-          }
           statusBarManager.updateVisibility();
         }
       })
     );
 
     // Wire watcher → UI refresh
-    watcher.onFileMutated = (mutatedFilePath: string) => {
-      const editor = vscode.window.activeTextEditor;
-      if (editor && normalizePath(editor.document.uri.fsPath) === normalizePath(mutatedFilePath)) {
-        gutterDecorator.refresh(editor);
-      }
+    watcher.onFileMutated = () => {
       sidebarProvider.refresh();
       statusBarManager.updateVisibility();
     };
@@ -243,7 +234,6 @@ export async function activate(context: vscode.ExtensionContext) {
         await rollbackExecutor.acceptPatch(id);
       }
       vscode.window.showInformationMessage('Changes successfully accepted.');
-      gutterDecorator.refresh(vscode.window.activeTextEditor);
       sidebarProvider.refresh();
       statusBarManager.updateVisibility();
     },
@@ -256,26 +246,13 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
       vscode.window.showInformationMessage('Changes successfully rolled back.');
-      gutterDecorator.refresh(vscode.window.activeTextEditor);
       sidebarProvider.refresh();
       statusBarManager.updateVisibility();
     }
   );
 
-  // Gutter Decoration event hooks
-  vscode.window.onDidChangeActiveTextEditor(editor => {
-    gutterDecorator.refresh(editor);
-  }, null, context.subscriptions);
-
-  vscode.workspace.onDidChangeTextDocument(event => {
-    const editor = vscode.window.activeTextEditor;
-    if (editor && editor.document === event.document) {
-      gutterDecorator.refresh(editor);
-    }
-  }, null, context.subscriptions);
-
   // 1. Start Session command
-  const startSessionCmd = vscode.commands.registerCommand('stavreng.startSession', async () => {
+  safeRegister('stavreng.startSession', async () => {
     const agentName = await vscode.window.showInputBox({
       prompt: 'Enter the AI Agent / tool name',
       placeHolder: 'e.g., Aider, Claude Dev, Cursor',
@@ -288,12 +265,10 @@ export async function activate(context: vscode.ExtensionContext) {
     sidebarProvider.setAgentRunning(true);
     vscode.window.showInformationMessage(`Stavreng is now tracking mutations from: ${agentName}`);
     sidebarProvider.refresh();
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
   });
-  context.subscriptions.push(startSessionCmd);
 
   // 2. Stop Session command
-  const stopSessionCmd = vscode.commands.registerCommand('stavreng.stopSession', async (force?: boolean) => {
+  safeRegister('stavreng.stopSession', async (force?: boolean) => {
     if (!force && sidebarProvider.isAgentRunning()) {
       vscode.window.showWarningMessage('An agent is currently running. Please exit the agent before stopping the tracking session.');
       return;
@@ -314,12 +289,10 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     sidebarProvider.refresh();
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
   });
-  context.subscriptions.push(stopSessionCmd);
 
   // 3. Review Hunk Diff command (Legacy side-by-side)
-  const reviewHunkDiffCmd = vscode.commands.registerCommand('stavreng.reviewHunkDiff', (patchId: string) => {
+  safeRegister('stavreng.reviewHunkDiff', (patchId: string) => {
     const patch = patchesRepo.getById(patchId);
     if (!patch) return;
 
@@ -337,10 +310,9 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }
   });
-  context.subscriptions.push(reviewHunkDiffCmd);
 
   // 12. Open Custom Review Tab command
-  const openCustomReviewTabCmd = vscode.commands.registerCommand('stavreng.openCustomReviewTab', (item: any) => {
+  safeRegister('stavreng.openCustomReviewTab', (item: any) => {
     let filePath: string | undefined;
     let sessionId: string | undefined;
 
@@ -386,40 +358,34 @@ export async function activate(context: vscode.ExtensionContext) {
       webviewReview.show(filePatches, true);
     }
   });
-  context.subscriptions.push(openCustomReviewTabCmd);
 
   // 4. Accept Hunk command (from CodeLens / hover links)
-  const acceptHunkCmd = vscode.commands.registerCommand('stavreng.acceptHunk', async (patchId: string) => {
+  safeRegister('stavreng.acceptHunk', async (patchId: string) => {
     await rollbackExecutor.acceptPatch(patchId);
     vscode.window.showInformationMessage('Hunk changes accepted.');
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(acceptHunkCmd);
 
   // 5. Reject Hunk command
-  const rejectHunkCmd = vscode.commands.registerCommand('stavreng.rejectHunk', async (patchId: string) => {
+  safeRegister('stavreng.rejectHunk', async (patchId: string) => {
     const res = await rollbackExecutor.rollbackHunk(patchId);
     if (res.success) {
       vscode.window.showInformationMessage('Hunk successfully rolled back.');
     } else {
       vscode.window.showErrorMessage(`Rollback failed: ${res.error}`);
     }
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(rejectHunkCmd);
 
   // 6. Show Timeline command
-  const showTimelineCmd = vscode.commands.registerCommand('stavreng.showTimeline', () => {
+  safeRegister('stavreng.showTimeline', () => {
     vscode.commands.executeCommand('workbench.view.extension.stavreng-explorer');
   });
-  context.subscriptions.push(showTimelineCmd);
 
   // 7. Review File Diff command (no split screen)
-  const reviewFileDiffCmd = vscode.commands.registerCommand('stavreng.reviewFileDiff', (item: any) => {
+  safeRegister('stavreng.reviewFileDiff', (item: any) => {
     let filePath: string | undefined;
     let sessionId: string | undefined;
 
@@ -462,10 +428,9 @@ export async function activate(context: vscode.ExtensionContext) {
     
     vscode.window.showWarningMessage('No baseline file state found for diff review.');
   });
-  context.subscriptions.push(reviewFileDiffCmd);
 
   // 8. Accept File Changes command
-  const acceptFileChangesCmd = vscode.commands.registerCommand('stavreng.acceptFileChanges', async (item: any) => {
+  safeRegister('stavreng.acceptFileChanges', async (item: any) => {
     let filePath: string | undefined;
     let sessionId: string | undefined;
 
@@ -498,15 +463,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(`Accepted all changes in ${path.basename(filePath)}.`);
 
     // Refresh UI
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     statusBarManager.updateVisibility();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(acceptFileChangesCmd);
 
   // 9. Reject File Changes command
-  const rejectFileChangesCmd = vscode.commands.registerCommand('stavreng.rejectFileChanges', async (item: any) => {
+  safeRegister('stavreng.rejectFileChanges', async (item: any) => {
     let filePath: string | undefined;
     let sessionId: string | undefined;
 
@@ -546,15 +509,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(`Rejected and reverted all changes in ${path.basename(filePath)}.`);
 
     // Refresh UI
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     statusBarManager.updateVisibility();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(rejectFileChangesCmd);
 
   // 10. Accept All Session Changes command
-  const acceptAllSessionCmd = vscode.commands.registerCommand('stavreng.acceptAllSession', async (item: any) => {
+  safeRegister('stavreng.acceptAllSession', async (item: any) => {
     let sessionId: string | undefined;
 
     if (typeof item === 'string') {
@@ -582,15 +543,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(`Accepted all changes for the session.`);
 
     // Refresh UI
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     statusBarManager.updateVisibility();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(acceptAllSessionCmd);
 
   // 11. Reject All Session Changes command
-  const rejectAllSessionCmd = vscode.commands.registerCommand('stavreng.rejectAllSession', async (item: any) => {
+  safeRegister('stavreng.rejectAllSession', async (item: any) => {
     let sessionId: string | undefined;
 
     if (typeof item === 'string') {
@@ -636,15 +595,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(`Rejected and reverted all changes for the session.`);
 
     // Refresh UI
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     sidebarProvider.refresh();
     statusBarManager.updateVisibility();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(rejectAllSessionCmd);
 
   // 13. Delete Session command
-  const deleteSessionCmd = vscode.commands.registerCommand('stavreng.deleteSession', async (item: any, forceSilent?: boolean) => {
+  safeRegister('stavreng.deleteSession', async (item: any, forceSilent?: boolean) => {
     let sessionId: string | undefined;
 
     if (typeof item === 'string') {
@@ -704,6 +661,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const activeSession = sessionsRepo.getActiveSession();
     const isDeletingActive = activeSession && activeSession.id === sessionId;
 
+    const statesToDelete = fileStatesRepo.getBySession(sessionId);
+
     // 1. Delete session from repository
     sessionsRepo.delete(sessionId);
 
@@ -717,7 +676,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // 3. Delete file states of this session
     fileStatesRepo.deleteBySession(sessionId);
 
-    // Line ownership is no longer tracked — nothing else to clean up here.
+    // Garbage collect backup files that are no longer referenced by any session
+    const deletedHashes = new Set(statesToDelete.map(s => s.baseSha256));
+    const remainingHashes = new Set(fileStatesRepo.getFileStates().map(s => s.baseSha256));
+    for (const hash of deletedHashes) {
+      if (!remainingHashes.has(hash)) {
+        journalManager.deleteBackup(hash);
+      }
+    }
 
     if (!forceSilent) {
       vscode.window.showInformationMessage(`Session "${session.agentName}" was successfully deleted.`);
@@ -725,17 +691,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Refresh all UI elements
     sidebarProvider.refresh();
-    if (vscode.window.activeTextEditor) {
-      gutterDecorator.refresh(vscode.window.activeTextEditor);
-    }
     statusBarManager.updateVisibility();
     webviewReview.refreshIfOpen();
   });
-  context.subscriptions.push(deleteSessionCmd);
 
-  // Initial decoration & status bar scan
+  // Initial status bar scan
   if (vscode.window.activeTextEditor) {
-    gutterDecorator.refresh(vscode.window.activeTextEditor);
     statusBarManager.updateVisibility();
   }
 

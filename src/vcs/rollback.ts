@@ -117,13 +117,13 @@ export class HunkRollbackExecutor {
     // Process bottom-to-top so line shifts don't affect earlier hunks
     stillPending.sort((a, b) => b.modifiedStartLine - a.modifiedStartLine);
 
-    let baseLines = currentContent.split('\n');
+    let baseLines = currentContent.split(/\r?\n/);
     for (const pendingPatch of stillPending) {
       const start = pendingPatch.modifiedStartLine - 1;
       const end = start + pendingPatch.modifiedLineCount;
       const origLines = pendingPatch.rawOriginal === ''
         ? []
-        : pendingPatch.rawOriginal.split('\n');
+        : pendingPatch.rawOriginal.split(/\r?\n/);
 
       baseLines = [
         ...baseLines.slice(0, start),
@@ -133,7 +133,7 @@ export class HunkRollbackExecutor {
     }
 
     const newBaseContent = baseLines.join('\n');
-    const newBaseSha256 = this.journalManager.createBackup(patch.filePath, newBaseContent);
+    const newBaseSha256 = this.journalManager.createBackup(newBaseContent);
 
     fileState.baseSha256 = newBaseSha256;
     fileState.currentSha256 = this.journalManager.calculateHash(currentContent);

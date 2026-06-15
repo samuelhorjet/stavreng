@@ -24,6 +24,10 @@
         Stavreng
       </div>
       <div class="session-actions">
+        <button id="btn-manual-tracking" class="btn-terminal-action idle" onclick="toggleManualSession()" title="Start tracking session for VS Code Extension Agents">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Track
+        </button>
         <button id="btn-launch" class="btn-terminal-action" onclick="launchAgent()" title="Quick Launch AI Agent">
           🚀 Launch
         </button>
@@ -183,14 +187,14 @@
 
           if (isCtrlA || isCtrlZ || isCtrlY || isCtrlX) {
             if (e.type === 'keydown') {
-              let char = '';
-              if (e.key === 'a') char = '\x01';
-              if (e.key === 'z') char = '\x1a';
-              if (e.key === 'y') char = '\x19';
-              if (e.key === 'x') char = '\x18';
+              let ch = '';
+              if (e.key === 'a') ch = '\x01';
+              if (e.key === 'z') ch = '\x1a';
+              if (e.key === 'y') ch = '\x19';
+              if (e.key === 'x') ch = '\x18';
 
-              if (char) {
-                vscode.postMessage({ command: 'input', data: char });
+              if (ch) {
+                vscode.postMessage({ command: 'input', data: ch });
               }
             }
             e.preventDefault();
@@ -263,6 +267,9 @@
       // Header Controls Callbacks
       window.toggleGuard = function() {
         vscode.postMessage({ command: 'toggle-agent', active: !isAgentRunning });
+      };
+      window.toggleManualSession = function() {
+        vscode.postMessage({ command: 'toggle-manual-session' });
       };
       window.launchAgent = function() {
         if (isInAgentCli) return;
@@ -613,6 +620,25 @@
           case 'state': {
             renderTimeline(msg.sessions);
             renderPending(msg.pendingFiles);
+
+            const btnManual = document.getElementById('btn-manual-tracking');
+            if (btnManual) {
+              if (msg.isManualTrackingActive) {
+                btnManual.classList.remove('idle');
+                btnManual.classList.add('active');
+                btnManual.style.background = 'var(--vscode-testing-iconPassed, #73c991)';
+                btnManual.style.color = '#fff';
+                btnManual.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg> Stop';
+                btnManual.title = 'Stop manual tracking session';
+              } else {
+                btnManual.classList.remove('active');
+                btnManual.classList.add('idle');
+                btnManual.style.background = '';
+                btnManual.style.color = '';
+                btnManual.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Track';
+                btnManual.title = 'Start tracking session for VS Code Extension Agents';
+              }
+            }
 
             // Block "New" and "Launch" buttons when there are pending AI changes.
             const hasPending = msg.pendingFiles && msg.pendingFiles.length > 0;

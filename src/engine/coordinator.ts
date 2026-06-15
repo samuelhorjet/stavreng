@@ -51,15 +51,19 @@ export class SessionCoordinator {
    */
   public async resumeLastSession(): Promise<Session | null> {
     const active = this.sessionsRepo.getActiveSession();
-    if (active) {
-      this.stopSession(active.id);
-    }
-
     const sessions = this.sessionsRepo.list().sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     if (sessions.length === 0) return null;
 
     const lastSession = sessions[0];
-    this.sessionsRepo.updateStatus(lastSession.id, 'ACTIVE');
+    if (active && active.id === lastSession.id) {
+      return active;
+    }
+
+    if (active) {
+      this.stopSession(active.id);
+    }
+
+    this.sessionsRepo.updateStatus(lastSession.id, 'ACTIVE', null);
 
     lastSession.status = 'ACTIVE';
     lastSession.endedAt = null;
@@ -92,10 +96,6 @@ export class SessionCoordinator {
       if (active) {
         this.activeSession = active;
         this.watcher.start();
-        // Snapshot in background — FSW gate will hold events until ready
-        this.watcher.refreshSnapshot().catch(err => {
-          console.error('[Stavreng] Background snapshot failed:', err);
-        });
       }
     }
     return this.activeSession;

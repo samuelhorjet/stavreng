@@ -1,4 +1,4 @@
-declare var require: any;
+declare function require(moduleName: string): any;
 const pty = require('node-pty');
 import * as readline from 'readline';
 
@@ -22,7 +22,6 @@ let ptyProcess: any;
 
 const rl = readline.createInterface({
   input: process.stdin,
-  output: process.stdout,
   terminal: false
 });
 

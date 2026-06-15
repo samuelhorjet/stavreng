@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{cspSource}}; script-src 'unsafe-inline';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review Changes</title>
+  <link rel="stylesheet" href="{{styleUri}}">
+</head>
+<body>
+  <div class="sticky-header">
+    <div class="header-title">
+      <h1>{{titleText}}</h1>
+      <span class="meta-info">{{subtitleText}}</span>
+    </div>
+    {{headerActions}}
+  </div>
+  
+  <div class="scroll-container">
+    <div class="diff-container">
+      {{fullHtml}}
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    const patchIds = JSON.parse('{{patchIdsStr}}');
+    
+    function sendMessage(action) {
+      vscode.postMessage({
+        command: action,
+        patchIds: patchIds
+      });
+    }
+
+    function acceptHunk(patchId) {
+      vscode.postMessage({
+        command: 'acceptHunk',
+        patchId: patchId
+      });
+    }
+
+    function rejectHunk(patchId) {
+      vscode.postMessage({
+        command: 'rejectHunk',
+        patchId: patchId
+      });
+    }
+  </script>
+</body>
+</html>

@@ -113,7 +113,7 @@ export class IgnoreManager {
       this.patterns = lines
         .map(l => l.trim())
         .filter(l => l.length > 0 && !l.startsWith('#'));
-      console.log(`[Stavreng] Loaded ${this.patterns.length} ignore pattern(s) from .stavreng-ignore`);
+      console.debug(`[Stavreng] Loaded ${this.patterns.length} ignore pattern(s) from .stavreng-ignore`);
     } catch (err) {
       console.error('[Stavreng] Failed to load .stavreng-ignore:', err);
       this.patterns = [];
@@ -128,6 +128,7 @@ export class IgnoreManager {
   public shouldIgnorePath(filePath: string): boolean {
     // Normalize to forward slashes for consistent matching on all platforms
     const normalized = filePath.replace(/\\/g, '/');
+    const segments = normalized.split('/');
     
     for (const pattern of this.patterns) {
       // Strip leading wildcards for simple matching
@@ -139,16 +140,21 @@ export class IgnoreManager {
         if (normalized.endsWith(ext)) return true;
       } else if (pattern.includes('*')) {
         // Simple wildcard: e.g. *.db-journal — check file name portion
-        const fileName = normalized.split('/').pop() ?? '';
+        const fileName = segments[segments.length - 1] ?? '';
         const escapedPattern = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
         if (new RegExp(`^${escapedPattern}$`).test(fileName)) return true;
       } else {
-        // Directory or file segment: match anywhere in the path
-        if (
-          normalized.includes(`/${clean}/`) ||
-          normalized.includes(`/${clean}`) ||
-          normalized.endsWith(`/${clean}`)
-        ) return true;
+        // Directory or file segment: match anywhere in the path, avoiding partial segment matches
+        if (clean.includes('/')) {
+          if (
+            normalized === clean ||
+            normalized.startsWith(clean + '/') ||
+            normalized.endsWith('/' + clean) ||
+            normalized.includes('/' + clean + '/')
+          ) return true;
+        } else {
+          if (segments.includes(clean)) return true;
+        }
       }
     }
     return false;

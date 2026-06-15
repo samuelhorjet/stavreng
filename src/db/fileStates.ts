@@ -18,6 +18,10 @@ export class FileStatesRepository {
     this.db.save();
   }
 
+  public getFileStates(): FileState[] {
+    return this.db.getFileStates();
+  }
+
   public getByFileAndSession(filePath: string, sessionId: string): FileState | undefined {
     return this.db.getFileStates().find(
       fs => fs.filePath === filePath && fs.sessionId === sessionId

@@ -9,6 +9,7 @@ export class StavrengStatusBarManager {
   private statusItem: vscode.StatusBarItem;
   private trackingToggleItem: vscode.StatusBarItem;
   private disposable: vscode.Disposable;
+  private debounceTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private sessionsRepo: SessionsRepository,
@@ -35,13 +36,22 @@ export class StavrengStatusBarManager {
 
     // Wire listeners to update visibility
     const subscriptions: vscode.Disposable[] = [];
-    vscode.window.onDidChangeActiveTextEditor(() => this.updateVisibility(), null, subscriptions);
+    vscode.window.onDidChangeActiveTextEditor(() => this.debouncedUpdateVisibility(), null, subscriptions);
     
     // We also want to refresh when text documents are saved/changed
-    vscode.workspace.onDidSaveTextDocument(() => this.updateVisibility(), null, subscriptions);
-    vscode.workspace.onDidChangeTextDocument(() => this.updateVisibility(), null, subscriptions);
+    vscode.workspace.onDidSaveTextDocument(() => this.debouncedUpdateVisibility(), null, subscriptions);
+    vscode.workspace.onDidChangeTextDocument(() => this.debouncedUpdateVisibility(), null, subscriptions);
 
     this.disposable = vscode.Disposable.from(...subscriptions);
+  }
+
+  private debouncedUpdateVisibility(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.updateVisibility();
+    }, 250);
   }
 
   public updateVisibility(): void {
@@ -103,6 +113,9 @@ export class StavrengStatusBarManager {
   }
 
   public dispose(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
     this.trackingToggleItem.dispose();
     this.statusItem.dispose();
     this.acceptItem.dispose();

@@ -30,6 +30,7 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
 
   /** Scrollback buffer: stores all raw PTY output so we can replay it when
    *  the webview is torn down (sidebar hidden) and recreated (sidebar shown). */
+  private isManualTrackingActive: boolean = false;
   private terminalScrollback = '';
   private static readonly MAX_SCROLLBACK = 400_000; // ~400 KB, ~3000 lines
 
@@ -64,7 +65,11 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
   // â”€â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   public isAgentRunning(): boolean {
-    return this.isInAgentCli || this.isAgentActive;
+    return this.isAgentActive || this.isManualTrackingActive;
+  }
+
+  public get isManualTracking(): boolean {
+    return this.isManualTrackingActive;
   }
 
   public dispose() {
@@ -505,13 +510,19 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private isSystemShellPrompt(clean: string): boolean {
+    // Windows PowerShell / CMD: e.g. "PS C:\Users\hp>" or "C:\Users\hp>"
     if (/(?:PS\s+)?[a-zA-Z]:\\[^>]*>\s*$/i.test(clean)) {
       return true;
     }
-    if (/[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+:.*[\$#%]\s*$/.test(clean)) {
+    // Unix full prompt: user@host:/path$ (must have the user@host: prefix to avoid
+    // false-positives on zsh prompts like "%" that appear inside agent output)
+    if (/[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+:[^$#%]*[\$#]\s*$/.test(clean)) {
       return true;
     }
-    if (/[\$#%]\s*$/.test(clean)) {
+    // Bare bash/sh prompt without user@host — only match "$ " or "# " at the very
+    // end of a SHORT line (< 80 chars) to avoid matching agent output that ends in $.
+    // We deliberately exclude "%" here because zsh uses it and agents emit it too.
+    if (clean.length < 80 && /^\$\s*$/.test(clean.trim())) {
       return true;
     }
     return false;
@@ -531,7 +542,10 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
 
     this.sendBridgeMessage({ action: 'write', data });
 
-    const cleanData = data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+    const cleanData = data
+      .replace(/\x1b[\]P^_][\s\S]*?(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]/g, '')
+      .replace(/\x1b[NO][\x20-\x7E]/g, '');
 
     for (let i = 0; i < cleanData.length; i++) {
       const ch = cleanData[i];
@@ -600,6 +614,8 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
               webviewView.webview.postMessage({ command: 'output', data: this.terminalScrollback });
             }
             this.handleResize(message.cols, message.rows);
+            // Dismiss spinner
+            webviewView.webview.postMessage({ command: 'ready' });
           } else if (!this.isExtensionReady) {
             // Extension is still snapshotting the workspace.
             // Save the dimensions and start the PTY once we're ready.
@@ -610,8 +626,27 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
           } else {
             // Extension is ready and PTY is not running â€” start a brand-new shell.
             this.startPty(message.cols, message.rows);
+            // Dismiss spinner
+            webviewView.webview.postMessage({ command: 'ready' });
           }
           this.sendStateMessage();
+          break;
+        case 'toggle-manual-session':
+          if (!this.isManualTrackingActive) {
+            vscode.commands.executeCommand('stavreng.startSession').then(() => {
+              // Check if a session was actually created (user didn't cancel)
+              const active = this.sessionsRepo.getActiveSession();
+              if (active) {
+                this.isManualTrackingActive = true;
+                this.sendStateMessage();
+              }
+            });
+          } else {
+            vscode.commands.executeCommand('stavreng.stopSession', true).then(() => {
+              this.isManualTrackingActive = false;
+              this.sendStateMessage();
+            });
+          }
           break;
         case 'new-terminal':
           if (this.isAgentRunning()) {
@@ -751,10 +786,22 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
 
     const activeSession = this.sessionsRepo.getActiveSession();
     const sessions = this.sessionsRepo.list().sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const pendingPatches = this.patchesRepo.getPatches().filter(p => p.status === 'PENDING');
+    const allPatches = this.patchesRepo.getPatches();
+    const pendingPatches = allPatches.filter(p => p.status === 'PENDING');
+
+    // Group patches by sessionId once to avoid O(N * S) performance cost
+    const patchesBySession = new Map<string, typeof allPatches>();
+    for (const p of allPatches) {
+      let list = patchesBySession.get(p.sessionId);
+      if (!list) {
+        list = [];
+        patchesBySession.set(p.sessionId, list);
+      }
+      list.push(p);
+    }
 
     const sessionsData = sessions.map(s => {
-      const patches = this.patchesRepo.getBySession(s.id);
+      const patches = patchesBySession.get(s.id) ?? [];
       const uniqueFiles = Array.from(new Set(patches.map(p => p.filePath)));
       const filesData = uniqueFiles.map(filePath => {
         const filePatches = patches.filter(p => p.filePath === filePath);
@@ -803,24 +850,25 @@ export class StavrengSidebarProvider implements vscode.WebviewViewProvider {
       activeSession: activeSession ? { id: activeSession.id, agentName: activeSession.agentName } : null,
       sessions: sessionsData,
       pendingFiles: pendingFilesData,
-      isAgentActive: this.isAgentActive
+      isAgentActive: this.isAgentActive,
+      isManualTrackingActive: this.isManualTrackingActive
     });
   }
 
   // â”€â”€â”€ HTML Content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   //
-  // The HTML template lives in media/sidebar.html and the styles in
-  // media/sidebar.css.  This method loads both files at runtime and
+  // The HTML template lives in resources/sidebar.html and the styles in
+  // resources/sidebar.css.  This method loads both files at runtime and
   // substitutes the {{PLACEHOLDER}} tokens with the correct webview URIs.
 
   private getHtmlContent(webview: vscode.Webview): string {
     const xtermCssUri    = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm',        'css', 'xterm.css'));
     const xtermJsUri     = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'xterm',        'lib', 'xterm.js'));
     const xtermFitJsUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@xterm', 'addon-fit',   'lib', 'addon-fit.js'));
-    const sidebarCssUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'src', 'ui', 'sidebar.css'));
+    const sidebarCssUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'sidebar.css'));
 
     const extensionRoot = this.context.extensionUri.fsPath;
-    const htmlTemplate  = fs.readFileSync(path.join(extensionRoot, 'src', 'ui', 'sidebar.html'), 'utf8');
+    const htmlTemplate  = fs.readFileSync(path.join(extensionRoot, 'resources', 'sidebar.html'), 'utf8');
 
     return htmlTemplate
       .replace(/{{CSP_SOURCE}}/g,    webview.cspSource)
